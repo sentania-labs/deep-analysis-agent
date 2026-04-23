@@ -80,3 +80,10 @@ openapi/generated/*.json
 icons/*.ico
 icons/*.png
 !icons/README.md
+
+# Diagram renderer virtualenv + lock
+docs/diagrams/.venv/
+docs/diagrams/uv.lock
+
+# Root uv lockfile (not tracked; CI uses `uv pip install -e .[dev]`)
+/uv.lock

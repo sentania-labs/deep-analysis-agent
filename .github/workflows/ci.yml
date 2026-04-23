@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Standing rule for sentania-labs: fork PRs don't run CI.
+# Every job re-checks this via `if:` (required on job-level for PRs).
+
+jobs:
+  lint:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.owner.login == 'sentania-labs'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: pipx install uv
+      - name: Install dev deps
+        run: uv pip install --system -e ".[dev]"
+      - name: ruff check
+        run: ruff check src/ tests/
+      - name: ruff format --check
+        run: ruff format --check src/ tests/
+
+  typecheck:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.owner.login == 'sentania-labs'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: pipx install uv
+      - name: Install deps
+        run: uv pip install --system -e ".[dev]"
+      - name: mypy
+        run: mypy src/deep_analysis_agent/
+
+  test:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.owner.login == 'sentania-labs'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: pipx install uv
+      - name: Install deps
+        run: uv pip install --system -e ".[dev]"
+      - name: pytest
+        run: pytest tests/ -v
+
+  diagram-drift:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.owner.login == 'sentania-labs'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: pipx install uv
+      - name: Render diagrams
+        working-directory: docs/diagrams
+        run: |
+          uv sync
+          uv run playwright install --with-deps chromium
+          for f in *.excalidraw; do
+            uv run python render.py "$f"
+          done
+      - name: Fail on diagram drift
+        run: git diff --exit-code docs/diagrams/*.png
