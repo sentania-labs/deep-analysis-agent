@@ -1,31 +1,29 @@
-# Create Squirrel.Windows release package.
-# Prereqs: nuget CLI + Squirrel installed; PyInstaller build done (dist/deep-analysis-agent/ exists).
-# Output: Releases/ directory with RELEASES, Setup.exe, Setup.msi, *-full.nupkg
+# Create Clowd.Squirrel release package.
+# Prereqs: Clowd.Squirrel installed via `nuget install Clowd.Squirrel -ExcludeVersion -OutputDirectory tools`
+#          PyInstaller build done (dist/deep-analysis-agent/ exists).
+# Output: Releases/ directory with RELEASES, Setup.exe, *-full.nupkg
 
 param(
     [Parameter(Mandatory)]
     [string]$Version,   # e.g. "0.4.0" (no leading v)
 
-    [string]$SquirrelPath = "",   # Override path to Squirrel.exe if not on PATH
-    [string]$NugetPath    = ""    # Override path to nuget.exe if not on PATH
+    [string]$SquirrelPath = ""   # Override path to Squirrel.exe
 )
 
 $ErrorActionPreference = "Stop"
 $RepoRoot = Resolve-Path "$PSScriptRoot\..\.."
-$BuildDir = "$PSScriptRoot"
 $ReleasesDir = "$RepoRoot\Releases"
 
-Set-Location $BuildDir
-
-# --- Resolve tools ---
-$Squirrel = if ($SquirrelPath) { $SquirrelPath } else { "Squirrel.exe" }
-$Nuget    = if ($NugetPath) { $NugetPath } else { "nuget.exe" }
-
-# Install Squirrel via Chocolatey if not found
-if (-not (Get-Command $Squirrel -ErrorAction SilentlyContinue)) {
-    Write-Host "Squirrel not found — installing via Chocolatey..."
-    choco install squirrel-windows --yes
-    $Squirrel = "Squirrel.exe"
+# --- Resolve Squirrel.exe from Clowd.Squirrel NuGet package ---
+if ($SquirrelPath) {
+    $Squirrel = $SquirrelPath
+} else {
+    $candidate = "$RepoRoot\tools\Clowd.Squirrel\tools\Squirrel.exe"
+    if (-not (Test-Path $candidate)) {
+        Write-Error "Squirrel.exe not found at $candidate. Install via: nuget install Clowd.Squirrel -ExcludeVersion -OutputDirectory tools"
+        exit 1
+    }
+    $Squirrel = $candidate
 }
 
 # --- Verify dist exists ---
@@ -35,19 +33,17 @@ if (-not (Test-Path $DistDir)) {
     exit 1
 }
 
-# --- Pack NuGet ---
-Write-Host "Packing NuGet package (version $Version)..."
-$NuspecPath = "deep-analysis-agent.nuspec"
-& $Nuget pack $NuspecPath -Version $Version -OutputDirectory $RepoRoot -NonInteractive
-if ($LASTEXITCODE -ne 0) { Write-Error "nuget pack failed"; exit $LASTEXITCODE }
-
-$NupkgPath = "$RepoRoot\DeepAnalysisAgent.$Version.nupkg"
-
-# --- Releasify ---
-Write-Host "Running Squirrel --releasify..."
+# --- Pack with Clowd.Squirrel ---
+Write-Host "Running Squirrel.exe pack (version $Version)..."
 New-Item -ItemType Directory -Force -Path $ReleasesDir | Out-Null
-& $Squirrel --releasify $NupkgPath --releaseDir $ReleasesDir --no-msi:$false
-if ($LASTEXITCODE -ne 0) { Write-Error "Squirrel releasify failed"; exit $LASTEXITCODE }
+
+& $Squirrel pack `
+    --packId "DeepAnalysisAgent" `
+    --packVersion $Version `
+    --packAuthors "Sentania Labs" `
+    --packDirectory $DistDir `
+    --releaseDir $ReleasesDir
+if ($LASTEXITCODE -ne 0) { Write-Error "Squirrel pack failed"; exit $LASTEXITCODE }
 
 Write-Host "Release artifacts written to $ReleasesDir"
 Get-ChildItem $ReleasesDir | Format-Table Name, Length

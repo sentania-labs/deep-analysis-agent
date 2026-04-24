@@ -43,8 +43,8 @@ jobs:
         run: choco install nuget.commandline --yes
         shell: pwsh
 
-      - name: Install Squirrel.Windows
-        run: choco install squirrel-windows --yes
+      - name: Install Clowd.Squirrel
+        run: nuget install Clowd.Squirrel -Version 2.11.1 -ExcludeVersion -OutputDirectory tools
         shell: pwsh
 
       - name: Strip leading v from tag
@@ -64,7 +64,6 @@ jobs:
         with:
           files: |
             Releases/Setup.exe
-            Releases/Setup.msi
             Releases/RELEASES
             Releases/DeepAnalysisAgent-${{ env.VERSION }}-full.nupkg
           generate_release_notes: true
