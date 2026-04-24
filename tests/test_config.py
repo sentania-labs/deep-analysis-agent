@@ -37,3 +37,16 @@ def test_load_config_creates_app_data_dir(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     load_config()
     assert (tmp_path / "DeepAnalysis").is_dir()
+
+
+def test_default_mtgo_log_dir_uses_localappdata(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    cfg = AppConfig()
+    assert cfg.mtgo.log_dir == tmp_path / "Apps" / "2.0"
+
+
+def test_default_mtgo_log_dir_fallback_without_localappdata(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    cfg = AppConfig()
+    assert cfg.mtgo.log_dir == tmp_path / "AppData" / "Local" / "Apps" / "2.0"

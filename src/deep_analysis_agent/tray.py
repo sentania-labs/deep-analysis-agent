@@ -50,7 +50,7 @@ def _icons_dir() -> Path:
 def _load_icon(name: str) -> Any:
     if Image is None:
         return None
-    p = _icons_dir() / f"{name}.png"
+    p = _icons_dir() / f"{name}.ico"
     if p.is_file():
         return Image.open(p)
     # Placeholder — solid colored square.

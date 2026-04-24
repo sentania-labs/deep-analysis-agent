@@ -174,6 +174,13 @@ async def _async_main() -> int:
             on_file_ready=on_file_ready,
         )
         watcher.start()
+        if not watcher.started:
+            log.error(
+                "watcher_not_started — MTGO log directory missing; "
+                "fix mtgo.log_dir in Settings and restart",
+                log_dir=str(config.mtgo.log_dir),
+            )
+            tray.set_state("error")
 
         hb_task = asyncio.create_task(
             _heartbeat_loop(config, tray, stop_event, revoked_event, log),

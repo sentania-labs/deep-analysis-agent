@@ -9,7 +9,7 @@ a = Analysis(
     ['../../src/deep_analysis_agent/__main__.py'],
     pathex=[],
     binaries=[],
-    datas=[('../../icons/*.png', 'icons'), ('../../icons/*.ico', 'icons')],
+    datas=[('../../icons/*.ico', 'icons')],
     hiddenimports=[
         'pystray._win32',
         'watchdog.observers.winapi',

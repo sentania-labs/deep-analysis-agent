@@ -4,6 +4,45 @@ Rolling session log. Most recent entry first.
 
 ---
 
+## 2026-04-24 — v0.4.0 released (`0a09572`, `ea9e727`)
+
+Follow-up to the Chocolatey→NuGet Squirrel swap. Two sequential fixes
+to the release pipeline, both root-caused from run logs.
+
+**Fix 1 (`0a09572`)** — Clowd.Squirrel 2.11.1 releasify rejected the
+package: `There are no SquirreAwareApp's in the provided package`
+(SquirrelCli/Program.cs:221). PyInstaller's bootloader is not a .NET
+assembly and carries no SquirrelAwareVersion manifest. Added the
+documented `--allowUnaware` flag to `Squirrel.exe pack`. Trade-off: the
+four `main.py` lifecycle hooks (`--squirrel-install/updated/obsolete/
+uninstall`) become dormant — Start Menu shortcut is still created, and
+updates still apply on next launch. Acceptable for v1. Also added a
+post-pack artifact verification step (Setup.exe + RELEASES + `*-full.nupkg`,
+fail-fast) per the code-review protocol.
+
+**Fix 2 (`ea9e727`)** — Squirrel pack then succeeded, but my own verify
+step caught a filename mismatch: Clowd.Squirrel writes the setup bundle
+as `<packId>Setup.exe` (Program.cs:370) — i.e.
+`DeepAnalysisAgentSetup.exe` — not plain `Setup.exe`. Both the PS1
+verify step AND the `softprops/action-gh-release@v2` upload list were
+referencing the wrong name. Updated both; tightened the nupkg glob to
+`*-full.nupkg`.
+
+v0.4.0 tag re-cut twice (safe — zero published consumers prior). Final
+successful run: 24871090963 (1m43s). Release published with all three
+expected assets. Unverified: actual install on a Windows host — Scott's
+smoke test. Future: embed a Win32 `<squirrelAware>1</squirrelAware>`
+manifest in the PyInstaller bootloader if missing `--squirrel-firstrun`
+hook hurts onboarding UX.
+
+---
+
+## 2026-04-23 — Release fix: swap Squirrel.Windows → Clowd.Squirrel (`619cf27`)
+
+v0.4.0 release run 24868572334 failed at `choco install squirrel-windows` — that Chocolatey package does not exist. Switched to Clowd.Squirrel 2.11.1 from NuGet (`nuget install Clowd.Squirrel -Version 2.11.1 -ExcludeVersion -OutputDirectory tools`). Its `Squirrel.exe pack --packId ... --packVersion ... --packDirectory ... --releaseDir ...` CLI replaces the `--releasify` + separate `nuget pack` + `.nuspec` dance, so deleted `build/windows/deep-analysis-agent.nuspec` and dropped `Setup.msi` from the upload list (Clowd.Squirrel supports `--msi` but v1 doesn't ship MSI). Update.exe CLI remains back-compat with old Squirrel so `main.py`'s four lifecycle hooks are untouched. Smoke CI on main: run 24870646297. Re-cut v0.4.0 tag → release run 24870651260 (in progress). Note: Clowd.Squirrel is now superseded by Velopack; V2 still maintained for bug fixes and was the minimal-change path.
+
+---
+
 ## 2026-04-23 — W8c: Squirrel.Windows packaging + release pipeline (`73b372b`)
 
 W8 workstream complete. Added PyInstaller one-folder spec (`build/windows/deep-analysis-agent.spec`), packaging scripts (`build_pyinstaller.ps1`, `create_squirrel_release.ps1`), version-templated `.nuspec`, and a tag-triggered `release.yml` (windows-latest, fork-gated, uploads `Setup.exe` / `Setup.msi` / `RELEASES` / `*.nupkg`). CI gained a `build-windows` smoke job that runs PyInstaller on windows-latest to catch spec rot. `main.py` handles all four Squirrel lifecycle hooks (`--squirrel-install/updated/obsolete/uninstall`) as exit-0 no-ops; 6 new tests cover them. Committed WUBRG pip PNGs + `app.ico` (needed for CI PyInstaller bundling; `.gitignore` updated). Added `CONTRIBUTING.md` documenting the PR-flip from v0.4.0 onward — this is the repo's last direct-to-main commit. Docs: `docs/release-process.md`, `docs/installer-architecture.md`, README Installation section. All 5 CI jobs green (run 24865681518). To cut v0.4.0: `git tag v0.4.0 && git push --tags`.
@@ -41,3 +80,9 @@ Fix-forward on W8a CI failures: removed stale `# type: ignore` comments in `inst
 Docs: README gained First-run / Normal operation / Troubleshooting sections. New `docs/auth-flow.md` mirrors the server's `agent-protocol.md` from the client's perspective (code format, DPAPI storage, revocation UX).
 
 Out of scope (W8c): Squirrel.Windows packaging, `/ingest/upload` server endpoint (agent-side shipper ready; server side still placeholder at `5bf9296`).
+
+## 2026-04-24 04:04 — v0.4.0 re-cut with launchable exe  [batch]
+
+**Type:** status
+
+Frozen `DeepAnalysisAgent.exe` crashed on launch because PyInstaller froze `main.py` as a raw script with no parent package, so every relative import (`from .config import ...` × 9) raised `ImportError` before logging fired. Fix: new `src/deep_analysis_agent/__main__.py` (absolute-imports `deep_analysis_agent.main`), PyInstaller spec now points at it, `--version` flag added to `main()`, and a non-bypassable smoke step in `build-windows` that launches the exe and asserts exit 0 (had to switch from `&` to `Start-Process -Wait -PassThru` because the exe is `console=False` and pwsh never populated `$LASTEXITCODE` for the detached GUI process). Commits `6c3be86`, `573fe2c`, `4c50ce4`. v0.4.0 tag/release deleted and re-cut at `4c50ce4`; release run 24871518494 succeeded with all three assets. Setup.exe SHA256 `06bb1bc64f92513dc6cf063975d8a422482db52804da7878010aeb5cb7509bcd` (36,000,392 bytes). Scott's Windows install-smoke still the remaining go/no-go; CI now guarantees the bundled exe starts.

@@ -62,10 +62,17 @@ class LogWatcher:
         self._worker: threading.Thread | None = None
         self._observer: Any | None = None
 
+    @property
+    def started(self) -> bool:
+        return self._worker is not None
+
     def start(self) -> None:
         if self._worker is not None:
             return
-        self._dir.mkdir(parents=True, exist_ok=True)
+        if not self._dir.is_dir():
+            logger.warning("watch_dir_missing path=%s", self._dir)
+            # Leave self._worker None so stop() is idempotent; caller surfaces error state.
+            return
         self._worker = threading.Thread(target=self._run, name="deep-analysis-watcher", daemon=True)
         self._worker.start()
         self._observer = Observer()

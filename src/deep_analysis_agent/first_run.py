@@ -23,7 +23,7 @@ from .config import AppConfig, save_config
 
 logger = structlog.get_logger(__name__)
 
-CLIENT_VERSION = "0.4.0"
+CLIENT_VERSION = "0.4.1"
 
 
 def _default_machine_name() -> str:

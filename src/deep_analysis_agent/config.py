@@ -37,8 +37,15 @@ except ImportError:  # pragma: no cover — non-Windows CI path
     _DPAPI = False
 
 
+def _default_mtgo_log_dir() -> Path:
+    base = os.environ.get("LOCALAPPDATA")
+    if base:
+        return Path(base) / "Apps" / "2.0"
+    return Path.home() / "AppData" / "Local" / "Apps" / "2.0"
+
+
 class MTGOSettings(BaseModel):
-    log_dir: Path = Path("C:/Users/Default/AppData/Local/Apps/2.0")
+    log_dir: Path = Field(default_factory=_default_mtgo_log_dir)
     watched_suffixes: list[str] = Field(default_factory=lambda: [".dat", ".log"])
     stability_seconds: float = 5.0
 
