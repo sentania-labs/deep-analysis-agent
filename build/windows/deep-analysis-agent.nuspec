@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2010/07/nuspec.xsd">
+  <metadata>
+    <id>DeepAnalysisAgent</id>
+    <!-- Version is injected by the packaging script from the git tag. -->
+    <version>$version$</version>
+    <authors>Sentania Labs</authors>
+    <description>Deep Analysis Agent — Windows tray client for MTGO match analytics. Ships raw game logs to a Deep Analysis server for parsing, analytics, and AI coaching.</description>
+    <projectUrl>https://github.com/sentania-labs/deep-analysis-agent</projectUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <copyright>Copyright 2026 Sentania Labs</copyright>
+    <tags>mtgo magic-the-gathering analytics tray</tags>
+  </metadata>
+  <files>
+    <!-- PyInstaller one-folder output. Squirrel packages everything under lib/. -->
+    <file src="..\..\dist\deep-analysis-agent\**" target="lib\net45\" />
+  </files>
+</package>

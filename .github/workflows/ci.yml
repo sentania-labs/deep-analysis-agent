@@ -82,3 +82,27 @@ jobs:
         with:
           name: rendered-diagrams
           path: docs/diagrams/*.png
+
+  build-windows:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.owner.login == 'sentania-labs'
+    runs-on: windows-latest
+    needs: [lint, typecheck, test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        run: pipx install uv
+      - name: Install deps (dev + build)
+        run: uv pip install --system -e ".[dev,build]"
+      - name: Build with PyInstaller
+        run: uv run pyinstaller build/windows/deep-analysis-agent.spec --noconfirm
+      - name: Verify exe produced
+        run: |
+          if (-not (Test-Path "dist/deep-analysis-agent/DeepAnalysisAgent.exe")) {
+            Write-Error "DeepAnalysisAgent.exe not found"
+            exit 1
+          }
+          Write-Host "Build OK: dist/deep-analysis-agent/DeepAnalysisAgent.exe"
+        shell: pwsh

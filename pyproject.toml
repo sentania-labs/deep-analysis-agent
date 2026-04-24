@@ -29,6 +29,9 @@ dev = [
     "pytest-asyncio>=0.23",
     "respx>=0.21",
 ]
+build = [
+    "pyinstaller>=6.6",
+]
 
 [project.scripts]
 deep-analysis-agent = "deep_analysis_agent.main:main"

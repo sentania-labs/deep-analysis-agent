@@ -14,9 +14,17 @@ The agent runs silently in your system tray, monitors your MTGO log directory, a
 
 ## Installation
 
-> **Squirrel.Windows installer — coming in W8c.**
+Download the latest `Setup.exe` from the [GitHub Releases](https://github.com/sentania-labs/deep-analysis-agent/releases) page and run it.
 
-The installer will be published as a GitHub Release asset. Download, run, done — it installs per-user to `%LOCALAPPDATA%\DeepAnalysis\` with no administrator privileges required.
+Squirrel installs the agent silently to `%LOCALAPPDATA%\DeepAnalysisAgent\` — no UAC prompt, no admin rights required.
+
+**First run:** the Deep Analysis tray icon will appear. Right-click → Settings to paste your registration code. Get a code from your server admin (or generate one via the admin UI).
+
+**Auto-updates:** on each startup, the agent checks for a newer release. Updates install silently in the background.
+
+**Uninstall:** via Windows Settings → Apps → Deep Analysis Agent, or run `%LOCALAPPDATA%\DeepAnalysisAgent\Update.exe --uninstall`.
+
+See [`docs/release-process.md`](docs/release-process.md) and [`docs/installer-architecture.md`](docs/installer-architecture.md) for packaging internals.
 
 ## First-run registration
 

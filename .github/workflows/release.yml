@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-and-release:
+    # Fork gate — consistent with sentania-labs CI standard
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.owner.login == 'sentania-labs'
+    runs-on: windows-latest
+    permissions:
+      contents: write   # needed to create GitHub Release + upload assets
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: pipx install uv
+
+      - name: Install deps (dev + build)
+        run: uv pip install --system -e ".[dev,build]"
+
+      - name: Build with PyInstaller
+        run: uv run pyinstaller build/windows/deep-analysis-agent.spec --noconfirm
+
+      - name: Verify PyInstaller output
+        run: |
+          if (-not (Test-Path "dist/deep-analysis-agent/DeepAnalysisAgent.exe")) {
+            Write-Error "DeepAnalysisAgent.exe not found in dist/"
+            exit 1
+          }
+          Write-Host "PyInstaller build OK"
+        shell: pwsh
+
+      - name: Install NuGet CLI
+        run: choco install nuget.commandline --yes
+        shell: pwsh
+
+      - name: Install Squirrel.Windows
+        run: choco install squirrel-windows --yes
+        shell: pwsh
+
+      - name: Strip leading v from tag
+        id: version
+        run: |
+          $ver = "${{ github.ref_name }}" -replace '^v', ''
+          echo "VERSION=$ver" >> $env:GITHUB_ENV
+        shell: pwsh
+
+      - name: Create Squirrel release
+        run: |
+          pwsh build/windows/create_squirrel_release.ps1 -Version $env:VERSION
+        shell: pwsh
+
+      - name: Upload release artifacts
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            Releases/Setup.exe
+            Releases/Setup.msi
+            Releases/RELEASES
+            Releases/DeepAnalysisAgent-${{ env.VERSION }}-full.nupkg
+          generate_release_notes: true

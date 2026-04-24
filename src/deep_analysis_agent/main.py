@@ -103,6 +103,25 @@ async def _handle_file(
     )
 
 
+_SQUIRREL_HOOKS = {
+    "--squirrel-install",
+    "--squirrel-updated",
+    "--squirrel-obsolete",
+    "--squirrel-uninstall",
+}
+
+
+def _handle_squirrel_hooks() -> bool:
+    """Return True if a Squirrel hook was handled (caller should exit 0)."""
+    if len(sys.argv) < 2:
+        return False
+    arg = sys.argv[1].lower()
+    # For v0.4.0 all hooks are no-ops — Squirrel's built-in helper handles
+    # shortcut creation/removal. Future versions can add post-update migrations,
+    # re-registration prompts, etc. here.
+    return arg in _SQUIRREL_HOOKS
+
+
 async def _async_main() -> int:
     config = load_config()
     configure_logging(config)
@@ -197,6 +216,8 @@ async def _async_main() -> int:
 
 
 def main() -> None:
+    if _handle_squirrel_hooks():
+        sys.exit(0)
     sys.exit(asyncio.run(_async_main()))
 
 
