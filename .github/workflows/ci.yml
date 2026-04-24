@@ -76,3 +76,9 @@ jobs:
           done
       - name: Fail on diagram drift
         run: git diff --exit-code docs/diagrams/*.png
+      - name: Upload rendered PNGs on drift
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rendered-diagrams
+          path: docs/diagrams/*.png
