@@ -50,3 +50,46 @@ def test_default_mtgo_log_dir_fallback_without_localappdata(tmp_path: Path, monk
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     cfg = AppConfig()
     assert cfg.mtgo.log_dir == tmp_path / "AppData" / "Local" / "Apps" / "2.0"
+
+
+def test_logging_format_defaults_to_plaintext(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    cfg = AppConfig()
+    assert cfg.logging.format == "plaintext"
+
+
+def test_logging_format_parses_json_from_toml(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    app_dir = tmp_path / "DeepAnalysis"
+    app_dir.mkdir(parents=True)
+    (app_dir / "config.toml").write_text(
+        '[logging]\nformat = "json"\nlevel = "DEBUG"\n',
+        encoding="utf-8",
+    )
+    cfg = load_config()
+    assert cfg.logging.format == "json"
+    assert cfg.logging.level == "DEBUG"
+
+
+def test_logging_format_parses_plaintext_explicitly(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    app_dir = tmp_path / "DeepAnalysis"
+    app_dir.mkdir(parents=True)
+    (app_dir / "config.toml").write_text(
+        '[logging]\nformat = "plaintext"\n',
+        encoding="utf-8",
+    )
+    cfg = load_config()
+    assert cfg.logging.format == "plaintext"
+
+
+def test_logging_format_missing_uses_default(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    app_dir = tmp_path / "DeepAnalysis"
+    app_dir.mkdir(parents=True)
+    (app_dir / "config.toml").write_text(
+        '[logging]\nlevel = "INFO"\n',
+        encoding="utf-8",
+    )
+    cfg = load_config()
+    assert cfg.logging.format == "plaintext"

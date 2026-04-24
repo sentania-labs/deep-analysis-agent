@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import threading
+import webbrowser
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
@@ -27,9 +28,16 @@ except Exception:  # pragma: no cover
     _TRAY_AVAILABLE = False
 
 
-TrayState = Literal["idle", "uploading", "error"]
+TrayState = Literal["idle", "uploading", "error", "watcher_disabled"]
 _COLOR_CYCLE = ["W", "U", "B", "R", "G"]
-_CYCLE_SECONDS = 2.0
+PIP_CYCLE_SECONDS_PER_COLOR = 2.0
+
+_STATE_LABELS: dict[str, str] = {
+    "idle": "Idle",
+    "uploading": "Uploading",
+    "error": "Error",
+    "watcher_disabled": "Watcher disabled",
+}
 
 _PLACEHOLDER_RGB = {
     "W": (245, 245, 230),
@@ -70,13 +78,32 @@ def _open_in_explorer(path: Path) -> None:
         logger.exception("failed to open %s", path)
 
 
+def _show_about_dialog(title: str, message: str) -> None:
+    try:
+        import tkinter as tk
+        from tkinter import messagebox
+    except ImportError:
+        logger.info("about_dialog_unavailable title=%s", title)
+        return
+
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showinfo(title, message)
+        root.destroy()
+    except Exception:
+        logger.exception("about dialog failed")
+
+
 class TrayIcon:
     def __init__(
         self,
         config: AppConfig,
+        version: str,
         on_reregister: Callable[[], None] | None = None,
     ) -> None:
         self._config = config
+        self._version = version
         self._on_reregister = on_reregister
         self._state: TrayState = "idle"
         self._state_lock = threading.Lock()
@@ -96,8 +123,29 @@ class TrayIcon:
             self._start_cycle()
         else:
             self._cycle_stop.set()
-            # "error" uses the R (red) icon — also covers the revoked-token case.
-            self._icon.icon = _load_icon("C" if state == "idle" else "R")
+            if state == "idle":
+                self._icon.icon = _load_icon("C")
+            else:
+                # "error" + "watcher_disabled" both use the R (red) icon.
+                self._icon.icon = _load_icon("R")
+        self._refresh_menu()
+
+    def _refresh_menu(self) -> None:
+        if self._icon is None:
+            return
+        try:
+            self._icon.update_menu()
+        except Exception:
+            logger.exception("update_menu failed")
+
+    def _status_text(self, _item: Any = None) -> str:
+        with self._state_lock:
+            label = _STATE_LABELS.get(self._state, self._state)
+        return f"Status: {label}"
+
+    def _log_file_path(self) -> Path:
+        base = self._config.logging.log_dir or logs_dir()
+        return base / "agent.log"
 
     def _start_cycle(self) -> None:
         if self._cycle_thread is not None and self._cycle_thread.is_alive():
@@ -111,7 +159,7 @@ class TrayIcon:
                 if self._icon is not None:
                     self._icon.icon = _load_icon(name)
                 i += 1
-                self._cycle_stop.wait(_CYCLE_SECONDS)
+                self._cycle_stop.wait(PIP_CYCLE_SECONDS_PER_COLOR)
 
         self._cycle_thread = threading.Thread(target=run, name="tray-cycle", daemon=True)
         self._cycle_thread.start()
@@ -119,12 +167,15 @@ class TrayIcon:
     def _menu(self) -> Any:
         if pystray is None:
             return None
-        machine = self._config.agent.machine_name or "unregistered"
         items: list[Any] = [
-            pystray.MenuItem(f"Registered as {machine}", None, enabled=False),
+            pystray.MenuItem(self._status_text, None, enabled=False),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Open logs folder", self._open_logs),
+            pystray.MenuItem("Open Dashboard", self._open_dashboard),
+            pystray.MenuItem("Open Log", self._open_log),
             pystray.MenuItem("Settings", self._open_settings),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Check for Updates", self._check_for_updates),
+            pystray.MenuItem("About", self._about),
         ]
         if self._on_reregister is not None:
             items.append(pystray.MenuItem("Re-register...", self._reregister))
@@ -135,10 +186,21 @@ class TrayIcon:
         if self._on_reregister is not None:
             self._on_reregister()
 
-    def _open_logs(self, *_: Any) -> None:
-        target = self._config.logging.log_dir or logs_dir()
-        target.mkdir(parents=True, exist_ok=True)
-        _open_in_explorer(target)
+    def _open_dashboard(self, *_: Any) -> None:
+        url = self._config.server.url
+        try:
+            webbrowser.open(url)
+        except Exception:
+            logger.exception("failed to open dashboard url=%s", url)
+
+    def _open_log(self, *_: Any) -> None:
+        log_file = self._log_file_path()
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        if not log_file.exists():
+            # Open the containing directory when the log file hasn't been created yet.
+            _open_in_explorer(log_file.parent)
+            return
+        _open_in_explorer(log_file)
 
     def _open_settings(self, *_: Any) -> None:
         cfg = config_path()
@@ -146,6 +208,27 @@ class TrayIcon:
             cfg.parent.mkdir(parents=True, exist_ok=True)
             cfg.write_text("# Deep Analysis agent config\n", encoding="utf-8")
         _open_in_explorer(cfg)
+
+    def _check_for_updates(self, *_: Any) -> None:
+        message = "Squirrel checks for updates on startup and daily — no manual check needed."
+        logger.info("check_for_updates_clicked note=%s", message)
+        if self._icon is not None:
+            try:
+                self._icon.notify(message, "Deep Analysis")
+            except Exception:
+                logger.exception("tray notify failed")
+
+    def _about(self, *_: Any) -> None:
+        agent_id = self._config.agent.agent_id or "unregistered"
+        machine = self._config.agent.machine_name or "unknown"
+        message = (
+            f"Deep Analysis agent {self._version}\n"
+            f"Machine: {machine}\n"
+            f"Agent ID: {agent_id}\n"
+            f"Server: {self._config.server.url}\n\n"
+            "MIT © Scott R. Bowe"
+        )
+        _show_about_dialog("Deep Analysis — About", message)
 
     def _quit(self, *_: Any) -> None:
         self._cycle_stop.set()

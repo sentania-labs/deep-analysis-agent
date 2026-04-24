@@ -67,6 +67,7 @@ class LoggingSettings(BaseModel):
     level: str = "INFO"
     log_dir: Path | None = None
     stderr: bool = True
+    format: str = "plaintext"
 
 
 class AppConfig(BaseSettings):

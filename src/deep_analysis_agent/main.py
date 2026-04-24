@@ -15,10 +15,22 @@ from .config import AppConfig, load_config, save_config
 from .dedup import DedupStore
 from .first_run import CLIENT_VERSION, run_first_run_flow
 from .instance_lock import AlreadyRunningError, InstanceLock
-from .logging import configure_logging
-from .paths import dedup_path
+from .logging import configure_logging, log_file_path
+from .paths import config_path, dedup_path
 from .tray import TrayIcon
 from .watcher import LogWatcher
+
+
+def _log_startup_banner(config: AppConfig, log: structlog.stdlib.BoundLogger) -> None:
+    log.info(
+        "agent_start",
+        version=CLIENT_VERSION,
+        agent_id=config.agent.agent_id,
+        config_path=str(config_path()),
+        log_path=str(log_file_path(config)),
+        server_url=config.server.url,
+        log_dir=str(config.mtgo.log_dir),
+    )
 
 
 async def _heartbeat_loop(
@@ -126,6 +138,7 @@ async def _async_main() -> int:
     config = load_config()
     configure_logging(config)
     log = structlog.get_logger("deep_analysis_agent.main")
+    _log_startup_banner(config, log)
 
     if not config.agent.api_token:
         log.info("first_run_flow_start")
@@ -156,7 +169,7 @@ async def _async_main() -> int:
             save_config(config)
             log.warning("reregister_requested — restart agent to complete")
 
-        tray = TrayIcon(config=config, on_reregister=_on_reregister)
+        tray = TrayIcon(config=config, version=CLIENT_VERSION, on_reregister=_on_reregister)
 
         def on_file_ready(path: Path) -> None:
             fut = asyncio.run_coroutine_threadsafe(
@@ -180,7 +193,7 @@ async def _async_main() -> int:
                 "fix mtgo.log_dir in Settings and restart",
                 log_dir=str(config.mtgo.log_dir),
             )
-            tray.set_state("error")
+            tray.set_state("watcher_disabled")
 
         hb_task = asyncio.create_task(
             _heartbeat_loop(config, tray, stop_event, revoked_event, log),
