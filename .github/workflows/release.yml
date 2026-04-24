@@ -62,8 +62,9 @@ jobs:
       - name: Upload release artifacts
         uses: softprops/action-gh-release@v2
         with:
+          # Clowd.Squirrel names the setup bundle "<packId>Setup.exe".
           files: |
-            Releases/Setup.exe
+            Releases/DeepAnalysisAgentSetup.exe
             Releases/RELEASES
             Releases/DeepAnalysisAgent-${{ env.VERSION }}-full.nupkg
           generate_release_notes: true

@@ -52,13 +52,15 @@ New-Item -ItemType Directory -Force -Path $ReleasesDir | Out-Null
 if ($LASTEXITCODE -ne 0) { Write-Error "Squirrel pack failed"; exit $LASTEXITCODE }
 
 # --- Verify expected artifacts ---
-$setupExe = Join-Path $ReleasesDir "Setup.exe"
+# Clowd.Squirrel names the setup bundle "<packId>Setup.exe" — see
+# SquirrelCli/Program.cs line 370: Path.Combine(di.FullName, $"{bundledzp.Id}Setup.exe").
+$setupExe = Join-Path $ReleasesDir "DeepAnalysisAgentSetup.exe"
 $releasesFile = Join-Path $ReleasesDir "RELEASES"
-$nupkgs = Get-ChildItem -Path $ReleasesDir -Filter "*.nupkg" -ErrorAction SilentlyContinue
+$nupkgs = Get-ChildItem -Path $ReleasesDir -Filter "*-full.nupkg" -ErrorAction SilentlyContinue
 
 if (-not (Test-Path $setupExe))    { Write-Error "Squirrel output missing: $setupExe"; exit 1 }
 if (-not (Test-Path $releasesFile)) { Write-Error "Squirrel output missing: $releasesFile"; exit 1 }
-if (-not $nupkgs -or $nupkgs.Count -lt 1) { Write-Error "Squirrel output missing: no .nupkg in $ReleasesDir"; exit 1 }
+if (-not $nupkgs -or $nupkgs.Count -lt 1) { Write-Error "Squirrel output missing: no *-full.nupkg in $ReleasesDir"; exit 1 }
 
 Write-Host "Release artifacts written to $ReleasesDir"
 Get-ChildItem $ReleasesDir | Format-Table Name, Length
