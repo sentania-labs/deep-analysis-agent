@@ -15,15 +15,16 @@ import asyncio
 import platform
 import socket
 from datetime import UTC, datetime
+from pathlib import Path
 
 import structlog
 
 from . import auth
-from .config import AppConfig, save_config
+from .config import AppConfig, _default_mtgo_log_dir, save_config
 
 logger = structlog.get_logger(__name__)
 
-CLIENT_VERSION = "0.4.1"
+CLIENT_VERSION = "0.4.2"
 
 
 def _default_machine_name() -> str:
@@ -82,6 +83,57 @@ def _prompt_code() -> str | None:
     return tk_result
 
 
+def _prompt_mtgo_dir_tk() -> str | None:
+    """Ask the user to browse to their MTGO install. None if unavailable/cancelled."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except ImportError:
+        return None
+
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        chosen = filedialog.askdirectory(
+            title="Deep Analysis — Locate your MTGO install directory",
+            mustexist=True,
+        )
+        root.destroy()
+    except Exception:
+        logger.exception("mtgo_dir_prompt_failed")
+        return None
+
+    if not chosen:
+        return None
+    return chosen
+
+
+def _resolve_mtgo_log_dir(config: AppConfig) -> None:
+    """Populate config.mtgo.log_dir. Tries default; falls back to a tkinter prompt.
+
+    Never blocks registration — if everything fails, the default is kept
+    (the watcher will log a clear error on startup so the user can fix it
+    via the tray "Settings" option).
+    """
+    default_dir = _default_mtgo_log_dir()
+    if default_dir.is_dir():
+        config.mtgo.log_dir = default_dir
+        logger.info("mtgo_log_dir_default_found", log_dir=str(default_dir))
+        return
+
+    chosen = _prompt_mtgo_dir_tk()
+    if chosen and Path(chosen).is_dir():
+        config.mtgo.log_dir = Path(chosen)
+        logger.info("mtgo_log_dir_user_selected", log_dir=chosen)
+        return
+
+    config.mtgo.log_dir = default_dir
+    logger.warning(
+        "mtgo_log_dir_unresolved — default does not exist and user did not pick one",
+        log_dir=str(default_dir),
+    )
+
+
 async def run_first_run_flow(config: AppConfig) -> bool:
     """Drive the interactive registration flow. Returns True on success."""
     if not config.agent.machine_name:
@@ -108,6 +160,7 @@ async def run_first_run_flow(config: AppConfig) -> bool:
         config.agent.agent_id = result.agent_id
         config.agent.api_token = result.api_token
         config.agent.registered_at = datetime.now(UTC)
+        _resolve_mtgo_log_dir(config)
         save_config(config)
         logger.info(
             "first_run_registered",

@@ -169,11 +169,20 @@ def save_config(config: AppConfig) -> None:
     os.replace(tmp, target)
 
 
+def _has_stale_default_user_path(log_dir: Path) -> bool:
+    s = str(log_dir).lower()
+    return "users\\default\\" in s or "users/default/" in s
+
+
 def load_config(**overrides: Any) -> AppConfig:
     """Load config; create the app data dir on first call if missing.
 
     If the TOML contains `api_token_enc`, decrypt it into the in-memory
     `agent.api_token` field so callers can use it directly.
+
+    Also migrates stale Default-user MTGO paths (a legacy artifact from
+    early installs that resolved LOCALAPPDATA to `C:\\Users\\Default\\`)
+    to the current default for the running user.
     """
     app_data_dir().mkdir(parents=True, exist_ok=True)
     cfg = AppConfig(**overrides)
@@ -192,4 +201,16 @@ def load_config(**overrides: Any) -> AppConfig:
             except Exception:
                 logger.exception("failed to decrypt api_token_enc — re-registration required")
                 cfg.agent.api_token = None
+
+    if _has_stale_default_user_path(cfg.mtgo.log_dir):
+        old_path = cfg.mtgo.log_dir
+        new_path = _default_mtgo_log_dir()
+        logger.warning(
+            "config_migration: rewriting stale Default-user path %s -> %s",
+            old_path,
+            new_path,
+        )
+        cfg.mtgo.log_dir = new_path
+        save_config(cfg)
+
     return cfg

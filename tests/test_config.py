@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from deep_analysis_agent import config as config_module
 from deep_analysis_agent.config import AppConfig, load_config
 from deep_analysis_agent.paths import config_path
 
@@ -93,3 +96,65 @@ def test_logging_format_missing_uses_default(tmp_path: Path, monkeypatch) -> Non
     )
     cfg = load_config()
     assert cfg.logging.format == "plaintext"
+
+
+def test_config_migration_rewrites_stale_default_user_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Loading a config with a Users\\Default\\... MTGO path rewrites it to the current default."""
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    app_dir = tmp_path / "DeepAnalysis"
+    app_dir.mkdir(parents=True)
+    # TOML literal string (single quotes) — backslashes are not escape sequences.
+    (app_dir / "config.toml").write_text(
+        "[mtgo]\nlog_dir = 'C:\\Users\\Default\\AppData\\Local\\Apps\\2.0\\MTGO'\n",
+        encoding="utf-8",
+    )
+
+    saved: list[AppConfig] = []
+    monkeypatch.setattr(config_module, "save_config", lambda c: saved.append(c))
+
+    cfg = load_config()
+
+    expected_default = tmp_path / "Apps" / "2.0"
+    assert cfg.mtgo.log_dir == expected_default
+    assert "default" not in str(cfg.mtgo.log_dir).lower()
+    assert len(saved) == 1
+
+
+def test_config_migration_idempotent_on_migrated_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Loading a config whose log_dir has already been migrated is a no-op (no save)."""
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    app_dir = tmp_path / "DeepAnalysis"
+    app_dir.mkdir(parents=True)
+    # Use a POSIX path (matches the default on this CI platform) in a literal TOML string.
+    already_ok = str(tmp_path / "Apps" / "2.0")
+    (app_dir / "config.toml").write_text(
+        f"[mtgo]\nlog_dir = '{already_ok}'\n",
+        encoding="utf-8",
+    )
+
+    saved: list[AppConfig] = []
+    monkeypatch.setattr(config_module, "save_config", lambda c: saved.append(c))
+
+    cfg = load_config()
+    assert cfg.mtgo.log_dir == tmp_path / "Apps" / "2.0"
+    assert saved == []
+
+
+def test_config_migration_case_insensitive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Lowercase 'users\\default\\' is also detected and rewritten."""
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    app_dir = tmp_path / "DeepAnalysis"
+    app_dir.mkdir(parents=True)
+    (app_dir / "config.toml").write_text(
+        "[mtgo]\nlog_dir = 'c:\\users\\default\\AppData\\Local\\Apps\\2.0\\MTGO'\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(config_module, "save_config", lambda c: None)
+
+    cfg = load_config()
+    assert "default" not in str(cfg.mtgo.log_dir).lower()
