@@ -34,6 +34,11 @@ if (-not (Test-Path $DistDir)) {
 }
 
 # --- Pack with Clowd.Squirrel ---
+# --allowUnaware is required because the PyInstaller-produced EXE is not
+# a Squirrel-aware .NET assembly — it has no embedded SquirrelAwareVersion
+# manifest. With --allowUnaware, Squirrel skips install/update/uninstall
+# hook invocation but still creates the Start Menu shortcut and delivers
+# updates on next launch, which is the UX we want for a tray app.
 Write-Host "Running Squirrel.exe pack (version $Version)..."
 New-Item -ItemType Directory -Force -Path $ReleasesDir | Out-Null
 
@@ -42,8 +47,18 @@ New-Item -ItemType Directory -Force -Path $ReleasesDir | Out-Null
     --packVersion $Version `
     --packAuthors "Sentania Labs" `
     --packDirectory $DistDir `
-    --releaseDir $ReleasesDir
+    --releaseDir $ReleasesDir `
+    --allowUnaware
 if ($LASTEXITCODE -ne 0) { Write-Error "Squirrel pack failed"; exit $LASTEXITCODE }
+
+# --- Verify expected artifacts ---
+$setupExe = Join-Path $ReleasesDir "Setup.exe"
+$releasesFile = Join-Path $ReleasesDir "RELEASES"
+$nupkgs = Get-ChildItem -Path $ReleasesDir -Filter "*.nupkg" -ErrorAction SilentlyContinue
+
+if (-not (Test-Path $setupExe))    { Write-Error "Squirrel output missing: $setupExe"; exit 1 }
+if (-not (Test-Path $releasesFile)) { Write-Error "Squirrel output missing: $releasesFile"; exit 1 }
+if (-not $nupkgs -or $nupkgs.Count -lt 1) { Write-Error "Squirrel output missing: no .nupkg in $ReleasesDir"; exit 1 }
 
 Write-Host "Release artifacts written to $ReleasesDir"
 Get-ChildItem $ReleasesDir | Format-Table Name, Length
