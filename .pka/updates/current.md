@@ -4,6 +4,12 @@ Rolling session log. Most recent entry first.
 
 ---
 
+## 2026-04-23 — W8c: Squirrel.Windows packaging + release pipeline (`73b372b`)
+
+W8 workstream complete. Added PyInstaller one-folder spec (`build/windows/deep-analysis-agent.spec`), packaging scripts (`build_pyinstaller.ps1`, `create_squirrel_release.ps1`), version-templated `.nuspec`, and a tag-triggered `release.yml` (windows-latest, fork-gated, uploads `Setup.exe` / `Setup.msi` / `RELEASES` / `*.nupkg`). CI gained a `build-windows` smoke job that runs PyInstaller on windows-latest to catch spec rot. `main.py` handles all four Squirrel lifecycle hooks (`--squirrel-install/updated/obsolete/uninstall`) as exit-0 no-ops; 6 new tests cover them. Committed WUBRG pip PNGs + `app.ico` (needed for CI PyInstaller bundling; `.gitignore` updated). Added `CONTRIBUTING.md` documenting the PR-flip from v0.4.0 onward — this is the repo's last direct-to-main commit. Docs: `docs/release-process.md`, `docs/installer-architecture.md`, README Installation section. All 5 CI jobs green (run 24865681518). To cut v0.4.0: `git tag v0.4.0 && git push --tags`.
+
+---
+
 ## 2026-04-22 — Initial scaffolding (Phase 1 foundation)
 
 Phase 1 foundation complete. Repo created at `sentania-labs/deep-analysis-agent` (MIT license). Scaffolded: LICENSE, README, CLAUDE.md, .gitignore, pyproject.toml, directory stubs (src/, installer/, openapi/generated/, icons/, tests/, .github/workflows/). Tagged v0.0.1. No agent code yet — Phase 3 work.
