@@ -110,6 +110,11 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $output = & dist/deep-analysis-agent/DeepAnalysisAgent.exe --version 2>&1
-          Write-Host "Smoke output: $output"
-          if ($LASTEXITCODE -ne 0) { throw "frozen exe smoke test failed (exit $LASTEXITCODE)" }
+          # GUI-subsystem exe (console=False) — must Start-Process with -Wait
+          # so pwsh waits for the process to exit and captures its code.
+          $proc = Start-Process -FilePath "dist/deep-analysis-agent/DeepAnalysisAgent.exe" `
+                                 -ArgumentList "--version" -Wait -PassThru
+          Write-Host "Exit code: $($proc.ExitCode)"
+          if ($proc.ExitCode -ne 0) {
+            throw "frozen exe smoke test failed (exit $($proc.ExitCode))"
+          }
