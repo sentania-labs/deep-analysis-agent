@@ -6,7 +6,7 @@
 block_cipher = None
 
 a = Analysis(
-    ['../../src/deep_analysis_agent/main.py'],
+    ['../../src/deep_analysis_agent/__main__.py'],
     pathex=[],
     binaries=[],
     datas=[('../../icons/*.png', 'icons'), ('../../icons/*.ico', 'icons')],

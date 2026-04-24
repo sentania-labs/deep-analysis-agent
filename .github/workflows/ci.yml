@@ -106,3 +106,10 @@ jobs:
           }
           Write-Host "Build OK: dist/deep-analysis-agent/DeepAnalysisAgent.exe"
         shell: pwsh
+      - name: Smoke-test the frozen exe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $output = & dist/deep-analysis-agent/DeepAnalysisAgent.exe --version 2>&1
+          Write-Host "Smoke output: $output"
+          if ($LASTEXITCODE -ne 0) { throw "frozen exe smoke test failed (exit $LASTEXITCODE)" }

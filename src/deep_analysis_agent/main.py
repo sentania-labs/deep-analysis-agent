@@ -216,6 +216,9 @@ async def _async_main() -> int:
 
 
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == '--version':
+        print(f'DeepAnalysisAgent {CLIENT_VERSION}')
+        sys.exit(0)
     if _handle_squirrel_hooks():
         sys.exit(0)
     sys.exit(asyncio.run(_async_main()))
