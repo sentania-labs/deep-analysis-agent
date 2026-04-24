@@ -13,15 +13,15 @@ from typing import Any
 MUTEX_NAME = "Global\\DeepAnalysisAgent"
 
 try:  # pragma: no cover — Windows only
-    import win32api  # type: ignore[import-not-found]
-    import win32event  # type: ignore[import-not-found]
-    import winerror  # type: ignore[import-not-found]
+    import win32api
+    import win32event
+    import winerror
 
     _WIN32 = True
 except ImportError:  # pragma: no cover — non-Windows CI path
-    win32api = None  # type: ignore[assignment]
-    win32event = None  # type: ignore[assignment]
-    winerror = None  # type: ignore[assignment]
+    win32api = None
+    win32event = None
+    winerror = None
     _WIN32 = False
 
 

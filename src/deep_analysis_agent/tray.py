@@ -17,12 +17,12 @@ from .paths import config_path, logs_dir
 logger = logging.getLogger(__name__)
 
 try:  # pragma: no cover — pystray needs a display backend
-    import pystray  # type: ignore[import-untyped]
+    import pystray
     from PIL import Image
 
     _TRAY_AVAILABLE = True
 except Exception:  # pragma: no cover
-    pystray = None  # type: ignore[assignment]
+    pystray = None
     Image = None  # type: ignore[assignment]
     _TRAY_AVAILABLE = False
 
@@ -71,8 +71,13 @@ def _open_in_explorer(path: Path) -> None:
 
 
 class TrayIcon:
-    def __init__(self, config: AppConfig) -> None:
+    def __init__(
+        self,
+        config: AppConfig,
+        on_reregister: Callable[[], None] | None = None,
+    ) -> None:
         self._config = config
+        self._on_reregister = on_reregister
         self._state: TrayState = "idle"
         self._state_lock = threading.Lock()
         self._cycle_stop = threading.Event()
@@ -91,6 +96,7 @@ class TrayIcon:
             self._start_cycle()
         else:
             self._cycle_stop.set()
+            # "error" uses the R (red) icon — also covers the revoked-token case.
             self._icon.icon = _load_icon("C" if state == "idle" else "R")
 
     def _start_cycle(self) -> None:
@@ -113,12 +119,21 @@ class TrayIcon:
     def _menu(self) -> Any:
         if pystray is None:
             return None
-        return pystray.Menu(
+        machine = self._config.agent.machine_name or "unregistered"
+        items: list[Any] = [
+            pystray.MenuItem(f"Registered as {machine}", None, enabled=False),
+            pystray.Menu.SEPARATOR,
             pystray.MenuItem("Open logs folder", self._open_logs),
             pystray.MenuItem("Settings", self._open_settings),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Quit", self._quit),
-        )
+        ]
+        if self._on_reregister is not None:
+            items.append(pystray.MenuItem("Re-register...", self._reregister))
+        items.extend([pystray.Menu.SEPARATOR, pystray.MenuItem("Quit", self._quit)])
+        return pystray.Menu(*items)
+
+    def _reregister(self, *_: Any) -> None:
+        if self._on_reregister is not None:
+            self._on_reregister()
 
     def _open_logs(self, *_: Any) -> None:
         target = self._config.logging.log_dir or logs_dir()
