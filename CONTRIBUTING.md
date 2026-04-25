@@ -12,8 +12,10 @@ for speed during initial construction. That phase is now complete.
 3. CI must pass before merge.
 4. One-person repos: self-merge is fine; the PR is the review artifact.
 
-Branch protection will be enabled at Scott's discretion. Until then, the convention
-is self-enforcing — respect the PR discipline even without enforcement.
+**Branch protection is enabled on `main`** (as of 2026-04-25): PRs are required, and
+the `lint`, `typecheck`, `test`, and `build-windows` checks must pass before merge.
+Repo admins can bypass for urgent fixes (admin enforcement is off), but the
+follow-up CI run on `main` must still go green.
 
 ## License
 

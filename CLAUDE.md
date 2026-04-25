@@ -87,6 +87,7 @@ Cross-platform is explicitly out of scope. Don't add platform guards, shims, or 
 - **Terse naming conventions.** Short, clear names. No Hungarian notation, no excessive prefixes.
 - **Tests in `tests/`.** Unit tests for pure logic (dedup, config parsing, stability checks). Integration tests are optional and not required pre-ship for v0.4.0.
 - **Code review protocol:** for non-trivial changes, spawn a subagent to self-review before committing.
+- **Post-v0.4.2 PR discipline.** `main` is protected by the `build-windows` gate (PyInstaller build + frozen-exe smoke test) plus `lint`, `typecheck`, and `test`. Land non-trivial work via feature-branch + PR so CI runs before merge; direct pushes to `main` are reserved for urgent fixes (admin bypass) and still need CI green on the follow-up run. See `CONTRIBUTING.md` for the workflow.
 
 ## Project structure
 
