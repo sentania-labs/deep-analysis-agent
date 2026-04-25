@@ -92,7 +92,15 @@ def _show_about_dialog(title: str, message: str) -> None:
     try:
         root = tk.Tk()
         root.withdraw()
-        messagebox.showinfo(title, message)
+
+        def _show_and_quit() -> None:
+            messagebox.showinfo(title, message)
+            root.quit()
+
+        # Drive the dialog inside its own mainloop so tk drains all events
+        # and the dialog window is fully torn down before we destroy the root.
+        root.after(0, _show_and_quit)
+        root.mainloop()
         root.destroy()
     except Exception:
         logger.exception("about dialog failed")
