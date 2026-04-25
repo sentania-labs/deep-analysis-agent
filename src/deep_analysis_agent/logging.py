@@ -48,6 +48,12 @@ def configure_logging(config: AppConfig) -> None:
         root.addHandler(h)
     root.setLevel(level)
 
+    # Quiet third-party loggers that emit pre-formatted strings (not structlog
+    # events) and would otherwise pollute the JSON log with raw lines like
+    # `HTTP Request: POST ... "HTTP/1.1 200 OK"`.
+    for noisy in ("httpx", "httpcore", "hpack", "h2"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
     if config.logging.format.lower() == "json":
         renderer: Any = structlog.processors.JSONRenderer()
     else:
