@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import subprocess
 import sys
 import threading
@@ -69,7 +68,11 @@ def _load_icon(name: str) -> Any:
 def _open_in_explorer(path: Path) -> None:
     try:
         if sys.platform == "win32":
-            os.startfile(str(path))  # type: ignore[attr-defined]
+            # Route through cmd's `start` so the per-user default-app
+            # association resolves the same way Explorer's double-click does,
+            # rather than os.startfile's ShellExecute path which can ignore
+            # user-overridden HKCU associations for .log/.toml.
+            subprocess.Popen(["start", "", str(path)], shell=True)
         elif sys.platform == "darwin":
             subprocess.Popen(["open", str(path)])
         else:
