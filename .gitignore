@@ -90,3 +90,6 @@ docs/diagrams/uv.lock
 
 # Root uv lockfile (not tracked; CI uses `uv pip install -e .[dev]`)
 /uv.lock
+# self-review pre-push gate
+.review-passed
+.claude/.review-audit.log

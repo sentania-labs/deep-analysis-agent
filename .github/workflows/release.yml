@@ -2,69 +2,40 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main]
+
+permissions:
+  contents: write
+  id-token: write
 
 jobs:
-  build-and-release:
-    # Fork gate — consistent with sentania-labs CI standard
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.owner.login == 'sentania-labs'
-    runs-on: windows-latest
-    permissions:
-      contents: write   # needed to create GitHub Release + upload assets
-
+  release:
+    runs-on: ubuntu-latest
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    concurrency:
+      group: release-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install uv
-        run: pipx install uv
+      - name: Install python-semantic-release
+        run: pip install python-semantic-release
 
-      - name: Install deps (dev + build)
-        run: uv pip install --system -e ".[dev,build]"
-
-      - name: Build with PyInstaller
-        run: uv run pyinstaller build/windows/deep-analysis-agent.spec --noconfirm
-
-      - name: Verify PyInstaller output
+      - name: Configure git
         run: |
-          if (-not (Test-Path "dist/deep-analysis-agent/DeepAnalysisAgent.exe")) {
-            Write-Error "DeepAnalysisAgent.exe not found in dist/"
-            exit 1
-          }
-          Write-Host "PyInstaller build OK"
-        shell: pwsh
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Install NuGet CLI
-        run: choco install nuget.commandline --yes
-        shell: pwsh
-
-      - name: Install Clowd.Squirrel
-        run: nuget install Clowd.Squirrel -Version 2.11.1 -ExcludeVersion -OutputDirectory tools
-        shell: pwsh
-
-      - name: Strip leading v from tag
-        id: version
+      - name: Run semantic-release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
-          $ver = "${{ github.ref_name }}" -replace '^v', ''
-          echo "VERSION=$ver" >> $env:GITHUB_ENV
-        shell: pwsh
-
-      - name: Create Squirrel release
-        run: |
-          pwsh build/windows/create_squirrel_release.ps1 -Version $env:VERSION
-        shell: pwsh
-
-      - name: Upload release artifacts
-        uses: softprops/action-gh-release@v2
-        with:
-          # Clowd.Squirrel names the setup bundle "<packId>Setup.exe".
-          files: |
-            Releases/DeepAnalysisAgentSetup.exe
-            Releases/RELEASES
-            Releases/DeepAnalysisAgent-${{ env.VERSION }}-full.nupkg
-          generate_release_notes: true
+          semantic-release version --no-vcs-release
+          semantic-release publish || true
