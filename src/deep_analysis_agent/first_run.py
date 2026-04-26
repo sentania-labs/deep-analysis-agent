@@ -24,7 +24,7 @@ from .config import AppConfig, _default_mtgo_log_dir, save_config
 
 logger = structlog.get_logger(__name__)
 
-CLIENT_VERSION = "0.4.2"
+CLIENT_VERSION = "0.4.3"
 
 
 def _default_machine_name() -> str:
