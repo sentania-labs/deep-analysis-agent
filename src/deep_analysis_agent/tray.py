@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import subprocess
 import sys
 import threading
 import time
@@ -14,10 +13,10 @@ from pathlib import Path
 from typing import Any, Literal
 
 from .about_window import AboutWindow
-from .config import AppConfig
+from .config import AppConfig, load_config
 from .log_viewer import LogViewerWindow
-from .logging import log_file_path
-from .paths import config_path
+from .logging import configure_logging, log_file_path
+from .settings_window import SettingsWindow
 
 logger = logging.getLogger(__name__)
 
@@ -70,32 +69,18 @@ def _load_icon(name: str) -> Any:
     return Image.new("RGB", (64, 64), color=rgb)
 
 
-def _open_in_explorer(path: Path) -> None:
-    try:
-        if sys.platform == "win32":
-            # Route through cmd's `start` so the per-user default-app
-            # association resolves the same way Explorer's double-click does,
-            # rather than os.startfile's ShellExecute path which can ignore
-            # user-overridden HKCU associations for .log/.toml.
-            subprocess.Popen(["start", "", str(path)], shell=True)
-        elif sys.platform == "darwin":
-            subprocess.Popen(["open", str(path)])
-        else:
-            subprocess.Popen(["xdg-open", str(path)])
-    except Exception:
-        logger.exception("failed to open %s", path)
-
-
 class TrayIcon:
     def __init__(
         self,
         config: AppConfig,
         version: str,
         on_reregister: Callable[[], None] | None = None,
+        on_reload: Callable[[AppConfig], None] | None = None,
     ) -> None:
         self._config = config
         self._version = version
         self._on_reregister = on_reregister
+        self._on_reload = on_reload
         self._state: TrayState = "idle"
         self._state_lock = threading.Lock()
         self._cycle_stop = threading.Event()
@@ -106,6 +91,7 @@ class TrayIcon:
         self._sub_windows_lock = threading.Lock()
         self._about_window: AboutWindow | None = None
         self._log_viewer: LogViewerWindow | None = None
+        self._settings_window: SettingsWindow | None = None
 
     def set_state(self, state: TrayState) -> None:
         with self._state_lock:
@@ -199,11 +185,50 @@ class TrayIcon:
         window.show()
 
     def _open_settings(self, *_: Any) -> None:
-        cfg = config_path()
-        if not cfg.exists():
-            cfg.parent.mkdir(parents=True, exist_ok=True)
-            cfg.write_text("# Deep Analysis agent config\n", encoding="utf-8")
-        _open_in_explorer(cfg)
+        existing = self._settings_window
+        if existing is not None and existing._thread is not None and existing._thread.is_alive():
+            return
+        window = SettingsWindow(
+            self._config,
+            on_save=self.reload_config,
+            on_close=lambda: self._unregister_sub_window(window),
+        )
+        self._settings_window = window
+        self._register_sub_window(window)
+        window.show()
+
+    def reload_config(self) -> None:
+        """Re-read config.toml from disk and hot-apply the new values.
+
+        The agent's config object is mutated in place so cross-component
+        references (heartbeat loop, file handler, etc.) pick up the new
+        values without needing to be re-injected. Logging is reconfigured
+        immediately. Watcher restart is delegated to ``on_reload`` (set
+        by ``main`` because the watcher lifecycle lives there).
+        """
+        try:
+            new_config = load_config()
+        except Exception:
+            logger.exception("reload_config: failed to load config from disk")
+            return
+
+        self._config.server = new_config.server
+        self._config.agent = new_config.agent
+        self._config.mtgo = new_config.mtgo
+        self._config.logging = new_config.logging
+
+        try:
+            configure_logging(self._config)
+        except Exception:
+            logger.exception("reload_config: configure_logging raised")
+
+        if self._on_reload is not None:
+            try:
+                self._on_reload(self._config)
+            except Exception:
+                logger.exception("reload_config: on_reload callback raised")
+
+        logger.info("config_reloaded")
 
     def _check_for_updates(self, *_: Any) -> None:
         message = "Squirrel checks for updates on startup and daily — no manual check needed."
