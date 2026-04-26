@@ -45,9 +45,10 @@ async def _heartbeat_loop(
     revoked_event: asyncio.Event,
     log: structlog.stdlib.BoundLogger,
 ) -> None:
-    interval = max(30, config.agent.heartbeat_interval_seconds)
     assert config.agent.api_token is not None
     while not stop_event.is_set():
+        # Re-read each iteration so SettingsWindow reload picks up new interval.
+        interval = max(30, config.agent.heartbeat_interval_seconds)
         try:
             result = await auth.heartbeat(
                 config.server.url,
@@ -174,8 +175,6 @@ async def _async_main() -> int:
             save_config(config)
             log.warning("reregister_requested — restart agent to complete")
 
-        tray = TrayIcon(config=config, version=CLIENT_VERSION, on_reregister=_on_reregister)
-
         def on_file_ready(path: Path) -> None:
             fut = asyncio.run_coroutine_threadsafe(
                 _handle_file(path, config, dedup, tray, revoked_event, log), loop
@@ -185,13 +184,46 @@ async def _async_main() -> int:
             except Exception:
                 log.exception("handle_file_raised", path=str(path))
 
-        watcher = LogWatcher(
-            watch_dir=config.mtgo.log_dir,
-            suffixes=frozenset(s.lower() for s in config.mtgo.watched_suffixes),
-            stability_seconds=config.mtgo.stability_seconds,
-            on_file_ready=on_file_ready,
+        # Mutable container so on_reload can swap the active watcher in place.
+        watcher_box: list[LogWatcher | None] = [None]
+
+        def _build_watcher() -> LogWatcher:
+            return LogWatcher(
+                watch_dir=config.mtgo.log_dir,
+                suffixes=frozenset(s.lower() for s in config.mtgo.watched_suffixes),
+                stability_seconds=config.mtgo.stability_seconds,
+                on_file_ready=on_file_ready,
+            )
+
+        def _on_reload(_new_config: AppConfig) -> None:
+            old = watcher_box[0]
+            if old is not None:
+                try:
+                    old.stop()
+                except Exception:
+                    log.exception("watcher_stop_failed_during_reload")
+            new_watcher = _build_watcher()
+            new_watcher.start()
+            watcher_box[0] = new_watcher
+            if not new_watcher.started:
+                log.error(
+                    "watcher_not_started_after_reload — MTGO log directory missing",
+                    log_dir=str(config.mtgo.log_dir),
+                )
+                tray.set_state("watcher_disabled")
+            else:
+                tray.set_state("idle")
+
+        tray = TrayIcon(
+            config=config,
+            version=CLIENT_VERSION,
+            on_reregister=_on_reregister,
+            on_reload=_on_reload,
         )
+
+        watcher = _build_watcher()
         watcher.start()
+        watcher_box[0] = watcher
         if not watcher.started:
             log.error(
                 "watcher_not_started — MTGO log directory missing; "
@@ -208,7 +240,9 @@ async def _async_main() -> int:
         async def _watch_revoked() -> None:
             await revoked_event.wait()
             log.warning("stopping watcher due to revocation")
-            watcher.stop()
+            current = watcher_box[0]
+            if current is not None:
+                current.stop()
 
         rev_task = asyncio.create_task(_watch_revoked(), name="revoke-watch")
 
@@ -216,7 +250,9 @@ async def _async_main() -> int:
 
         def _on_quit() -> None:
             quit_event.set()
-            watcher.stop()
+            current = watcher_box[0]
+            if current is not None:
+                current.stop()
             dedup.close()
 
         # Run tray in a thread so its blocking .run() doesn't hog the loop.
