@@ -15,7 +15,9 @@ from typing import Any, Literal
 
 from .about_window import AboutWindow
 from .config import AppConfig
-from .paths import config_path, logs_dir
+from .log_viewer import LogViewerWindow
+from .logging import log_file_path
+from .paths import config_path
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +105,7 @@ class TrayIcon:
         self._sub_windows: list[Any] = []
         self._sub_windows_lock = threading.Lock()
         self._about_window: AboutWindow | None = None
+        self._log_viewer: LogViewerWindow | None = None
 
     def set_state(self, state: TrayState) -> None:
         with self._state_lock:
@@ -134,10 +137,6 @@ class TrayIcon:
         with self._state_lock:
             label = _STATE_LABELS.get(self._state, self._state)
         return f"Status: {label}"
-
-    def _log_file_path(self) -> Path:
-        base = self._config.logging.log_dir or logs_dir()
-        return base / "agent.log"
 
     def _start_cycle(self) -> None:
         if self._cycle_thread is not None and self._cycle_thread.is_alive():
@@ -186,13 +185,18 @@ class TrayIcon:
             logger.exception("failed to open dashboard url=%s", url)
 
     def _open_log(self, *_: Any) -> None:
-        log_file = self._log_file_path()
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-        if not log_file.exists():
-            # Open the containing directory when the log file hasn't been created yet.
-            _open_in_explorer(log_file.parent)
+        existing = self._log_viewer
+        if existing is not None and existing._thread is not None and existing._thread.is_alive():
             return
-        _open_in_explorer(log_file)
+        log_file = log_file_path(self._config)
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        window = LogViewerWindow(
+            log_file,
+            on_close=lambda: self._unregister_sub_window(window),
+        )
+        self._log_viewer = window
+        self._register_sub_window(window)
+        window.show()
 
     def _open_settings(self, *_: Any) -> None:
         cfg = config_path()
