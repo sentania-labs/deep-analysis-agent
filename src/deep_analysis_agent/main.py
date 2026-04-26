@@ -20,8 +20,13 @@ from .paths import config_path, dedup_path
 from .tray import TrayIcon
 from .watcher import LogWatcher
 
+_STARTUP_BANNER_RULE = "=" * 60
+
 
 def _log_startup_banner(config: AppConfig, log: structlog.stdlib.BoundLogger) -> None:
+    log.info(_STARTUP_BANNER_RULE)
+    log.info("Deep Analysis agent starting", version=CLIENT_VERSION)
+    log.info(_STARTUP_BANNER_RULE)
     log.info(
         "agent_start",
         version=CLIENT_VERSION,
