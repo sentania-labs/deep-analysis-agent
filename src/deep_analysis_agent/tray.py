@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
 
+from .about_window import AboutWindow
 from .config import AppConfig
 from .paths import config_path, logs_dir
 
@@ -81,31 +84,6 @@ def _open_in_explorer(path: Path) -> None:
         logger.exception("failed to open %s", path)
 
 
-def _show_about_dialog(title: str, message: str) -> None:
-    try:
-        import tkinter as tk
-        from tkinter import messagebox
-    except ImportError:
-        logger.info("about_dialog_unavailable title=%s", title)
-        return
-
-    try:
-        root = tk.Tk()
-        root.withdraw()
-
-        def _show_and_quit() -> None:
-            messagebox.showinfo(title, message)
-            root.quit()
-
-        # Drive the dialog inside its own mainloop so tk drains all events
-        # and the dialog window is fully torn down before we destroy the root.
-        root.after(0, _show_and_quit)
-        root.mainloop()
-        root.destroy()
-    except Exception:
-        logger.exception("about dialog failed")
-
-
 class TrayIcon:
     def __init__(
         self,
@@ -122,6 +100,9 @@ class TrayIcon:
         self._cycle_thread: threading.Thread | None = None
         self._icon: Any = None
         self._on_quit: Callable[[], None] | None = None
+        self._sub_windows: list[Any] = []
+        self._sub_windows_lock = threading.Lock()
+        self._about_window: AboutWindow | None = None
 
     def set_state(self, state: TrayState) -> None:
         with self._state_lock:
@@ -230,19 +211,46 @@ class TrayIcon:
                 logger.exception("tray notify failed")
 
     def _about(self, *_: Any) -> None:
-        agent_id = self._config.agent.agent_id or "unregistered"
-        machine = self._config.agent.machine_name or "unknown"
-        message = (
-            f"Deep Analysis agent {self._version}\n"
-            f"Machine: {machine}\n"
-            f"Agent ID: {agent_id}\n"
-            f"Server: {self._config.server.url}\n\n"
-            "MIT © Scott R. Bowe"
+        existing = self._about_window
+        if existing is not None and existing._thread is not None and existing._thread.is_alive():
+            return
+        window = AboutWindow(
+            self._config,
+            on_close=lambda: self._unregister_sub_window(window),
         )
-        _show_about_dialog("Deep Analysis — About", message)
+        self._about_window = window
+        self._register_sub_window(window)
+        window.show()
+
+    def _register_sub_window(self, window: Any) -> None:
+        with self._sub_windows_lock:
+            self._sub_windows.append(window)
+
+    def _unregister_sub_window(self, window: Any) -> None:
+        with self._sub_windows_lock, contextlib.suppress(ValueError):
+            self._sub_windows.remove(window)
+
+    def _close_sub_windows(self, grace_seconds: float = 0.3) -> None:
+        """Close every registered sub-window.
+
+        ``close()`` schedules ``root.destroy`` on the window's own tkinter
+        loop — calling from this thread is safe because ``tk.after`` is
+        the cross-thread-safe handoff. A short grace period lets those
+        destroys actually land before the interpreter exits.
+        """
+        with self._sub_windows_lock:
+            windows = list(self._sub_windows)
+        for window in windows:
+            try:
+                window.close()
+            except Exception:
+                logger.exception("Error closing sub-window %r", window)
+        if windows:
+            time.sleep(grace_seconds)
 
     def _quit(self, *_: Any) -> None:
         self._cycle_stop.set()
+        self._close_sub_windows()
         if self._icon is not None:
             self._icon.stop()
         if self._on_quit is not None:
