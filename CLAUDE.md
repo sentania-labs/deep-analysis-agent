@@ -15,6 +15,14 @@ The agent is the client-side half of the Deep Analysis platform. It runs as a Wi
 - **Packaging:** Squirrel.Windows (per-user install, invisible auto-updates, no UAC prompts)
 - **Install target:** `%LOCALAPPDATA%\DeepAnalysis\`
 
+## Charter
+
+This workspace is software. The "What this is" / product
+scope above is the charter. Software authors don't touch
+infrastructure outside their charter — even with credentials
+available. For work that needs out-of-charter access, use a
+sanctioned cross-system channel.
+
 ## Tech stack
 
 | Component | Choice |
