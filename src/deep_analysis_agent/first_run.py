@@ -24,7 +24,7 @@ from .config import AppConfig, _default_mtgo_log_dir, save_config
 
 logger = structlog.get_logger(__name__)
 
-CLIENT_VERSION = "0.4.3"
+CLIENT_VERSION = "0.4.4"
 
 
 def _default_machine_name() -> str:
@@ -83,6 +83,162 @@ def _prompt_code() -> str | None:
     return tk_result
 
 
+def _prompt_method_tk() -> int | None:
+    """Ask the user which registration method to use via tkinter.
+
+    Returns 1 for email/password, 2 for registration code, None if the
+    user cancelled. Returns -1 if tkinter is unavailable.
+    """
+    try:
+        import tkinter as tk
+        from tkinter import simpledialog
+    except ImportError:
+        return -1
+
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        for _ in range(2):
+            answer = simpledialog.askstring(
+                "Deep Analysis — Register",
+                "Enter 1 for Email/Password or 2 for Registration Code:",
+            )
+            if answer is None:
+                root.destroy()
+                return None
+            answer = answer.strip()
+            if answer == "1":
+                root.destroy()
+                return 1
+            if answer == "2":
+                root.destroy()
+                return 2
+        root.destroy()
+        return None
+    except Exception:
+        logger.exception("tkinter method-prompt failed")
+        return -1
+
+
+def _prompt_method_stdin() -> int | None:
+    """Prompt for registration method on stdin. Returns 1, 2, or None."""
+    print("Deep Analysis — Register your agent:")
+    print("  [1] Log in with email/password")
+    print("  [2] Enter a registration code")
+    try:
+        choice = input("Select (or blank to cancel): ").strip()
+    except EOFError:
+        return None
+    if choice == "1":
+        return 1
+    if choice == "2":
+        return 2
+    return None
+
+
+def _prompt_method() -> int | None:
+    tk_result = _prompt_method_tk()
+    if tk_result == -1:
+        return _prompt_method_stdin()
+    return tk_result
+
+
+def _prompt_email_password_tk() -> tuple[str, str] | None:
+    """Two tkinter dialogs for email then password. None if unavailable/cancelled."""
+    try:
+        import tkinter as tk
+        from tkinter import simpledialog
+    except ImportError:
+        return None
+
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        email = simpledialog.askstring(
+            "Deep Analysis — Sign in",
+            "Email:",
+        )
+        if email is None:
+            root.destroy()
+            return None
+        email = email.strip()
+        if not email:
+            root.destroy()
+            return None
+        password = simpledialog.askstring(
+            "Deep Analysis — Sign in",
+            "Password:",
+            show="*",
+        )
+        root.destroy()
+    except Exception:
+        logger.exception("tkinter credentials prompt failed")
+        return None
+
+    if password is None or not password:
+        return None
+    return email, password
+
+
+def _prompt_email_password_stdin() -> tuple[str, str] | None:
+    """Prompt for email + password on stdin. Uses getpass for the password."""
+    import getpass
+
+    print("Deep Analysis — sign in:")
+    try:
+        email = input("Email: ").strip()
+    except EOFError:
+        return None
+    if not email:
+        return None
+    try:
+        password = getpass.getpass("Password: ")
+    except (EOFError, KeyboardInterrupt):
+        return None
+    if not password:
+        return None
+    return email, password
+
+
+def _prompt_email_password() -> tuple[str, str] | None:
+    tk_result = _prompt_email_password_tk()
+    if tk_result is not None:
+        return tk_result
+    return _prompt_email_password_stdin()
+
+
+def _prompt_agent_name(default: str) -> str:
+    """Prompt for an agent name; returns `default` if blank or cancelled."""
+    try:
+        import tkinter as tk
+        from tkinter import simpledialog
+    except ImportError:
+        tk = None  # type: ignore[assignment]
+        simpledialog = None  # type: ignore[assignment]
+
+    if tk is not None and simpledialog is not None:
+        try:
+            root = tk.Tk()
+            root.withdraw()
+            answer = simpledialog.askstring(
+                "Deep Analysis — Agent name",
+                f"Agent name (leave blank for default: {default}):",
+            )
+            root.destroy()
+            if answer is None:
+                return default
+            answer = answer.strip()
+            return answer or default
+        except Exception:
+            logger.exception("tkinter agent-name prompt failed")
+
+    try:
+        entered = input(f"Agent name (default: {default}): ").strip()
+    except EOFError:
+        return default
+    return entered or default
+
+
 def _prompt_mtgo_dir_tk() -> str | None:
     """Ask the user to browse to their MTGO install. None if unavailable/cancelled."""
     try:
@@ -139,6 +295,53 @@ async def run_first_run_flow(config: AppConfig) -> bool:
     if not config.agent.machine_name:
         config.agent.machine_name = _default_machine_name()
 
+    method: int | None = None
+    for _ in range(3):
+        method = _prompt_method()
+        if method in (1, 2):
+            break
+        if method is None:
+            logger.info("first_run_cancelled")
+            return False
+    if method not in (1, 2):
+        logger.error("first_run_no_method_selected")
+        return False
+
+    if method == 1:
+        creds = _prompt_email_password()
+        if creds is None:
+            logger.info("first_run_cancelled")
+            return False
+        email, password = creds
+        agent_name = _prompt_agent_name(config.agent.machine_name)
+        try:
+            result = await auth.register_with_credentials(
+                config.server.url,
+                email=email,
+                password=password,
+                agent_name=agent_name,
+                tls_verify=config.server.tls_verify,
+            )
+        except auth.RegistrationError as exc:
+            logger.warning("first_run_register_with_credentials_failed", error=str(exc))
+            print(f"Registration failed: {exc}")
+            return False
+
+        config.agent.machine_name = agent_name
+        config.agent.agent_id = result.agent_id
+        config.agent.api_token = result.api_token
+        config.agent.registered_at = datetime.now(UTC)
+        _resolve_mtgo_log_dir(config)
+        save_config(config)
+        print(f"Registered! Agent ID: {result.agent_id}")
+        logger.info(
+            "first_run_registered",
+            agent_id=result.agent_id,
+            machine_name=config.agent.machine_name,
+            method="credentials",
+        )
+        return True
+
     for _attempt in range(3):
         code = _prompt_code()
         if code is None:
@@ -166,6 +369,7 @@ async def run_first_run_flow(config: AppConfig) -> bool:
             "first_run_registered",
             agent_id=result.agent_id,
             machine_name=config.agent.machine_name,
+            method="code",
         )
         return True
 
