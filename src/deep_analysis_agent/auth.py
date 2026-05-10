@@ -80,6 +80,43 @@ async def register(
     )
 
 
+async def register_with_credentials(
+    server_url: str,
+    email: str,
+    password: str,
+    agent_name: str,
+    tls_verify: bool | str = True,
+) -> RegistrationResult:
+    """Register an agent via email/password instead of a registration code."""
+    url = server_url.rstrip("/") + "/auth/agent/register-with-credentials"
+    payload = {
+        "email": email,
+        "password": password,
+        "agent_name": agent_name,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=_timeout(), verify=tls_verify) as client:
+            resp = await client.post(url, json=payload)
+    except httpx.HTTPError as exc:
+        raise RegistrationError(f"network error: {exc}") from exc
+
+    if resp.status_code == 401:
+        raise RegistrationError("invalid email or password")
+    if resp.status_code == 403:
+        raise RegistrationError("admin accounts cannot register an agent")
+    if resp.status_code == 409:
+        raise RegistrationError("rate limit exceeded or agent already registered")
+    if resp.status_code >= 400:
+        raise RegistrationError(f"server returned {resp.status_code}: {resp.text[:200]}")
+
+    data = resp.json()
+    return RegistrationResult(
+        agent_id=data["agent_id"],
+        api_token=data["agent_key"],
+        user_id=0,
+    )
+
+
 async def heartbeat(
     server_url: str,
     api_token: str,

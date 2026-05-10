@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.4.4 — 2026-05-10
+
+### What's new
+- **Dual registration methods** — on first launch, the agent now offers two registration paths: log in with email/password (new `POST /auth/agent/register-with-credentials` endpoint) or enter a registration code (existing flow). Agent name defaults to hostname; user may override at prompt.
+
 ## v0.4.3 — 2026-04-26
 
 ### What's new
