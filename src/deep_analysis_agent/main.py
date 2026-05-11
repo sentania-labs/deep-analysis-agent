@@ -86,13 +86,16 @@ async def _handle_file(
     if revoked_event.is_set():
         log.info("skip_revoked", path=str(path))
         return
+    if dedup.is_path_seen(path):
+        log.info("skip_already_uploaded", path=str(path))
+        return
     try:
-        sha = dedup.hash_file(path)
+        sha = await asyncio.to_thread(dedup.hash_file, path)
     except OSError:
         log.exception("hash_failed", path=str(path))
         return
     if dedup.is_seen(sha):
-        log.debug("skip_seen", path=str(path), sha256=sha[:8])
+        log.info("skip_seen", path=str(path), sha256=sha[:8])
         return
 
     assert config.agent.api_token is not None

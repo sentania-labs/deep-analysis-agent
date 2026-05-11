@@ -32,11 +32,21 @@ class DedupStore:
             )
             """
         )
+        self._db.execute(
+            "CREATE INDEX IF NOT EXISTS ix_seen_files_path ON seen_files (original_path)"
+        )
 
     def is_seen(self, sha256: str) -> bool:
         with self._lock:
             row = self._db.execute(
                 "SELECT 1 FROM seen_files WHERE sha256 = ?", (sha256,)
+            ).fetchone()
+        return row is not None
+
+    def is_path_seen(self, path: Path) -> bool:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT 1 FROM seen_files WHERE original_path = ?", (str(path),)
             ).fetchone()
         return row is not None
 
