@@ -86,7 +86,7 @@ async def _handle_file(
     if revoked_event.is_set():
         log.info("skip_revoked", path=str(path))
         return
-    if dedup.is_path_seen(path):
+    if dedup.is_path_unchanged(path):
         log.info("skip_already_uploaded", path=str(path))
         return
     try:

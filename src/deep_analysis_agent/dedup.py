@@ -8,6 +8,7 @@ permanently lost on caller failure in earlier versions.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import sqlite3
 import threading
@@ -35,6 +36,9 @@ class DedupStore:
         self._db.execute(
             "CREATE INDEX IF NOT EXISTS ix_seen_files_path ON seen_files (original_path)"
         )
+        for col, col_type in [("file_size", "INTEGER"), ("file_mtime", "REAL")]:
+            with contextlib.suppress(sqlite3.OperationalError):
+                self._db.execute(f"ALTER TABLE seen_files ADD COLUMN {col} {col_type}")
 
     def is_seen(self, sha256: str) -> bool:
         with self._lock:
@@ -43,25 +47,39 @@ class DedupStore:
             ).fetchone()
         return row is not None
 
-    def is_path_seen(self, path: Path) -> bool:
+    def is_path_unchanged(self, path: Path) -> bool:
+        try:
+            st = path.stat()
+        except OSError:
+            return False
         with self._lock:
             row = self._db.execute(
-                "SELECT 1 FROM seen_files WHERE original_path = ?", (str(path),)
+                "SELECT file_size, file_mtime FROM seen_files WHERE original_path = ?",
+                (str(path),),
             ).fetchone()
-        return row is not None
+        if row is None:
+            return False
+        return row[0] == st.st_size and row[1] == st.st_mtime
 
     def mark_seen(self, sha256: str, path: Path) -> None:
         now = datetime.now(UTC).isoformat()
+        try:
+            st = path.stat()
+            size, mtime = st.st_size, st.st_mtime
+        except OSError:
+            size, mtime = None, None
         with self._lock:
             self._db.execute(
                 """
-                INSERT INTO seen_files (sha256, original_path, seen_at)
-                VALUES (?, ?, ?)
+                INSERT INTO seen_files (sha256, original_path, seen_at, file_size, file_mtime)
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(sha256) DO UPDATE SET
                     original_path = excluded.original_path,
-                    seen_at = excluded.seen_at
+                    seen_at = excluded.seen_at,
+                    file_size = excluded.file_size,
+                    file_mtime = excluded.file_mtime
                 """,
-                (sha256, str(path), now),
+                (sha256, str(path), now, size, mtime),
             )
 
     def hash_file(self, path: Path) -> str:
