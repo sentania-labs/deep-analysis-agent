@@ -10,10 +10,10 @@ from pathlib import Path
 
 import structlog
 
-from . import auth, shipper
+from . import __version__, auth, shipper
 from .config import AppConfig, load_config, save_config
 from .dedup import DedupStore
-from .first_run import CLIENT_VERSION, run_first_run_flow
+from .first_run import run_first_run_flow
 from .instance_lock import AlreadyRunningError, InstanceLock
 from .logging import configure_logging, log_file_path
 from .paths import config_path, dedup_path
@@ -25,11 +25,11 @@ _STARTUP_BANNER_RULE = "=" * 60
 
 def _log_startup_banner(config: AppConfig, log: structlog.stdlib.BoundLogger) -> None:
     log.info(_STARTUP_BANNER_RULE)
-    log.info("Deep Analysis agent starting", version=CLIENT_VERSION)
+    log.info("Deep Analysis agent starting", version=__version__)
     log.info(_STARTUP_BANNER_RULE)
     log.info(
         "agent_start",
-        version=CLIENT_VERSION,
+        version=__version__,
         agent_id=config.agent.agent_id,
         config_path=str(config_path()),
         log_path=str(log_file_path(config)),
@@ -53,7 +53,7 @@ async def _heartbeat_loop(
             result = await auth.heartbeat(
                 config.server.url,
                 config.agent.api_token,
-                CLIENT_VERSION,
+                __version__,
                 tls_verify=config.server.tls_verify,
             )
         except auth.HeartbeatError as exc:
@@ -193,6 +193,7 @@ async def _async_main() -> int:
                 suffixes=frozenset(s.lower() for s in config.mtgo.watched_suffixes),
                 stability_seconds=config.mtgo.stability_seconds,
                 on_file_ready=on_file_ready,
+                name_glob=config.mtgo.watched_name_glob,
             )
 
         def _on_reload(_new_config: AppConfig) -> None:
@@ -216,7 +217,7 @@ async def _async_main() -> int:
 
         tray = TrayIcon(
             config=config,
-            version=CLIENT_VERSION,
+            version=__version__,
             on_reregister=_on_reregister,
             on_reload=_on_reload,
         )
@@ -278,7 +279,7 @@ async def _async_main() -> int:
 
 def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "--version":
-        print(f"DeepAnalysisAgent {CLIENT_VERSION}")
+        print(f"DeepAnalysisAgent {__version__}")
         sys.exit(0)
     if _handle_squirrel_hooks():
         sys.exit(0)

@@ -19,12 +19,10 @@ from pathlib import Path
 
 import structlog
 
-from . import auth
+from . import __version__, auth
 from .config import AppConfig, _default_mtgo_log_dir, save_config
 
 logger = structlog.get_logger(__name__)
-
-CLIENT_VERSION = "0.4.4"
 
 
 def _default_machine_name() -> str:
@@ -320,6 +318,7 @@ async def run_first_run_flow(config: AppConfig) -> bool:
                 email=email,
                 password=password,
                 agent_name=agent_name,
+                client_version=__version__,
                 tls_verify=config.server.tls_verify,
             )
         except auth.RegistrationError as exc:
@@ -352,7 +351,7 @@ async def run_first_run_flow(config: AppConfig) -> bool:
                 config.server.url,
                 code=code,
                 machine_name=config.agent.machine_name,
-                client_version=CLIENT_VERSION,
+                client_version=__version__,
                 tls_verify=config.server.tls_verify,
             )
         except auth.RegistrationError as exc:

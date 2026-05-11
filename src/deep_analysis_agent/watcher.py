@@ -7,6 +7,7 @@ hashing (the v0.3.7 ordering rule).
 
 from __future__ import annotations
 
+import fnmatch
 import logging
 import queue
 import threading
@@ -27,14 +28,23 @@ _MAX_STABILITY_WAIT = 120.0  # give up after this much continuous churn
 
 
 class _Handler(FileSystemEventHandler):
-    def __init__(self, enqueue: Callable[[Path], None], suffixes: frozenset[str]) -> None:
+    def __init__(
+        self,
+        enqueue: Callable[[Path], None],
+        suffixes: frozenset[str],
+        name_glob: str | None,
+    ) -> None:
         self._enqueue = enqueue
         self._suffixes = suffixes
+        self._name_glob = name_glob
 
     def _maybe(self, path_str: str) -> None:
         path = Path(path_str)
-        if path.suffix.lower() in self._suffixes:
-            self._enqueue(path)
+        if path.suffix.lower() not in self._suffixes:
+            return
+        if self._name_glob and not fnmatch.fnmatch(path.name, self._name_glob):
+            return
+        self._enqueue(path)
 
     def on_created(self, event: FileSystemEvent) -> None:
         if not event.is_directory:
@@ -52,9 +62,11 @@ class LogWatcher:
         suffixes: frozenset[str],
         stability_seconds: float,
         on_file_ready: FileReadyCallback,
+        name_glob: str | None = None,
     ) -> None:
         self._dir = watch_dir
         self._suffixes = frozenset(s.lower() for s in suffixes)
+        self._name_glob = name_glob
         self._stability = stability_seconds
         self._cb = on_file_ready
         self._queue: queue.Queue[Path | None] = queue.Queue()
@@ -77,7 +89,9 @@ class LogWatcher:
         self._worker.start()
         self._observer = Observer()
         self._observer.schedule(
-            _Handler(self._enqueue, self._suffixes), str(self._dir), recursive=True
+            _Handler(self._enqueue, self._suffixes, self._name_glob),
+            str(self._dir),
+            recursive=True,
         )
         self._observer.start()
         self._startup_scan()
@@ -105,9 +119,14 @@ class LogWatcher:
             return
         count = 0
         for p in self._dir.rglob("*"):
-            if p.is_file() and p.suffix.lower() in self._suffixes:
-                self._queue.put(p)
-                count += 1
+            if not p.is_file():
+                continue
+            if p.suffix.lower() not in self._suffixes:
+                continue
+            if self._name_glob and not fnmatch.fnmatch(p.name, self._name_glob):
+                continue
+            self._queue.put(p)
+            count += 1
         logger.info("watcher startup scan queued %d file(s)", count)
 
     def _run(self) -> None:

@@ -85,6 +85,7 @@ async def register_with_credentials(
     email: str,
     password: str,
     agent_name: str,
+    client_version: str,
     tls_verify: bool | str = True,
 ) -> RegistrationResult:
     """Register an agent via email/password instead of a registration code."""
@@ -93,6 +94,7 @@ async def register_with_credentials(
         "email": email,
         "password": password,
         "agent_name": agent_name,
+        "client_version": client_version,
     }
     try:
         async with httpx.AsyncClient(timeout=_timeout(), verify=tls_verify) as client:

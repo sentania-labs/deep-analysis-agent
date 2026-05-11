@@ -5,9 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
+from deep_analysis_agent import __version__
 from deep_analysis_agent import main as main_mod
 from deep_analysis_agent.config import AppConfig
-from deep_analysis_agent.first_run import CLIENT_VERSION
 
 
 def _agent_start_call(log: MagicMock) -> tuple[str, dict[str, object]]:
@@ -29,7 +29,7 @@ def test_log_startup_banner_emits_expected_fields(tmp_path: Path, monkeypatch) -
 
     event, kwargs = _agent_start_call(log)
     assert event == "agent_start"
-    assert kwargs["version"] == CLIENT_VERSION
+    assert kwargs["version"] == __version__
     assert kwargs["agent_id"] == "agent-xyz"
     assert kwargs["server_url"] == "https://example.test"
     assert kwargs["config_path"].endswith("config.toml")
@@ -63,4 +63,4 @@ def test_log_startup_banner_emits_prominent_version_line(tmp_path: Path, monkeyp
     starting_idx = next(i for i, m in enumerate(messages) if m == "Deep Analysis agent starting")
     assert rule_indices[0] < starting_idx < rule_indices[1]
     starting_call = log.info.call_args_list[starting_idx]
-    assert starting_call.kwargs["version"] == CLIENT_VERSION
+    assert starting_call.kwargs["version"] == __version__
