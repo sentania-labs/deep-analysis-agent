@@ -22,6 +22,9 @@ from .watcher import LogWatcher
 
 _STARTUP_BANNER_RULE = "=" * 60
 
+_HASH_RETRIES = 3
+_HASH_RETRY_DELAY = 2.0
+
 
 def _log_startup_banner(config: AppConfig, log: structlog.stdlib.BoundLogger) -> None:
     log.info(_STARTUP_BANNER_RULE)
@@ -89,11 +92,27 @@ async def _handle_file(
     if dedup.is_path_unchanged(path):
         log.info("skip_already_uploaded", path=str(path))
         return
-    try:
-        sha = await asyncio.to_thread(dedup.hash_file, path)
-    except OSError:
-        log.exception("hash_failed", path=str(path))
-        return
+    sha: str | None = None
+    for attempt in range(1, _HASH_RETRIES + 1):
+        try:
+            sha = await asyncio.to_thread(dedup.hash_file, path)
+            break
+        except PermissionError:
+            if attempt < _HASH_RETRIES:
+                log.warning(
+                    "hash_retry",
+                    path=str(path),
+                    attempt=attempt,
+                    delay=_HASH_RETRY_DELAY,
+                )
+                await asyncio.sleep(_HASH_RETRY_DELAY)
+            else:
+                log.error("hash_failed_after_retries", path=str(path), attempts=_HASH_RETRIES)
+                return
+        except OSError:
+            log.exception("hash_failed", path=str(path))
+            return
+    assert sha is not None
     if dedup.is_seen(sha):
         log.info("skip_seen", path=str(path), sha256=sha[:8])
         return
