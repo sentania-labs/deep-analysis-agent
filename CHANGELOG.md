@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.4.5 — 2026-05-10
+
+### Fixes
+- **File filter** — watcher now only uploads `Match_GameLog_*.dat` files; chat logs, identity files, and other `.dat` noise are ignored. Configurable via `mtgo.watched_name_glob`.
+- **register-with-credentials 422** — `client_version` is now sent in the request body, matching the server schema.
+
 ## v0.4.4 — 2026-05-10
 
 ### What's new

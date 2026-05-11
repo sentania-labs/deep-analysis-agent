@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 import respx
@@ -85,10 +87,28 @@ async def test_register_with_credentials_success() -> None:
             email="user@example.com",
             password="hunter2",
             agent_name="scott-laptop",
+            client_version="0.4.5",
         )
     assert result.agent_id == "b-2"
     assert result.api_token == "key-xyz"
     assert result.user_id == 0
+
+
+async def test_register_with_credentials_sends_client_version() -> None:
+    async with respx.mock(base_url=SERVER) as mock:
+        route = mock.post("/auth/agent/register-with-credentials").respond(
+            201, json={"agent_id": "b-2", "agent_key": "key-xyz"}
+        )
+        await auth.register_with_credentials(
+            SERVER,
+            email="user@example.com",
+            password="hunter2",
+            agent_name="scott-laptop",
+            client_version="0.4.5",
+        )
+        assert route.called
+        body = json.loads(mock.calls.last.request.content)
+    assert body["client_version"] == "0.4.5"
 
 
 async def test_register_with_credentials_401() -> None:
@@ -96,7 +116,7 @@ async def test_register_with_credentials_401() -> None:
         mock.post("/auth/agent/register-with-credentials").respond(401, json={"error": "nope"})
         with pytest.raises(auth.RegistrationError):
             await auth.register_with_credentials(
-                SERVER, email="u@x", password="bad", agent_name="m"
+                SERVER, email="u@x", password="bad", agent_name="m", client_version="0.4.5"
             )
 
 
@@ -105,7 +125,7 @@ async def test_register_with_credentials_403() -> None:
         mock.post("/auth/agent/register-with-credentials").respond(403, json={"error": "admin"})
         with pytest.raises(auth.RegistrationError):
             await auth.register_with_credentials(
-                SERVER, email="admin@x", password="x", agent_name="m"
+                SERVER, email="admin@x", password="x", agent_name="m", client_version="0.4.5"
             )
 
 
@@ -113,7 +133,9 @@ async def test_register_with_credentials_409() -> None:
     async with respx.mock(base_url=SERVER) as mock:
         mock.post("/auth/agent/register-with-credentials").respond(409, json={"error": "rate"})
         with pytest.raises(auth.RegistrationError):
-            await auth.register_with_credentials(SERVER, email="u@x", password="x", agent_name="m")
+            await auth.register_with_credentials(
+                SERVER, email="u@x", password="x", agent_name="m", client_version="0.4.5"
+            )
 
 
 async def test_register_with_credentials_network_error() -> None:
@@ -122,4 +144,6 @@ async def test_register_with_credentials_network_error() -> None:
             side_effect=httpx.ConnectError("boom")
         )
         with pytest.raises(auth.RegistrationError):
-            await auth.register_with_credentials(SERVER, email="u@x", password="x", agent_name="m")
+            await auth.register_with_credentials(
+                SERVER, email="u@x", password="x", agent_name="m", client_version="0.4.5"
+            )
