@@ -80,7 +80,7 @@ async def test_register_network_error() -> None:
 async def test_register_with_credentials_success() -> None:
     async with respx.mock(base_url=SERVER) as mock:
         mock.post("/auth/agent/register-with-credentials").respond(
-            201, json={"agent_id": "b-2", "agent_key": "key-xyz"}
+            201, json={"agent_id": "b-2", "api_token": "key-xyz", "user_id": 42}
         )
         result = await auth.register_with_credentials(
             SERVER,
@@ -91,13 +91,13 @@ async def test_register_with_credentials_success() -> None:
         )
     assert result.agent_id == "b-2"
     assert result.api_token == "key-xyz"
-    assert result.user_id == 0
+    assert result.user_id == 42
 
 
 async def test_register_with_credentials_sends_client_version() -> None:
     async with respx.mock(base_url=SERVER) as mock:
         route = mock.post("/auth/agent/register-with-credentials").respond(
-            201, json={"agent_id": "b-2", "agent_key": "key-xyz"}
+            201, json={"agent_id": "b-2", "api_token": "key-xyz", "user_id": 42}
         )
         await auth.register_with_credentials(
             SERVER,
