@@ -114,8 +114,8 @@ async def register_with_credentials(
     data = resp.json()
     return RegistrationResult(
         agent_id=data["agent_id"],
-        api_token=data["agent_key"],
-        user_id=0,
+        api_token=data["api_token"],
+        user_id=int(data["user_id"]),
     )
 
 

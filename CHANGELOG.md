@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.4.7 — 2026-05-10
+
+### Fixes
+- **register-with-credentials KeyError** — agent now reads `api_token` (the actual server field) instead of the non-existent `agent_key`, and parses `user_id` from the response instead of hardcoding `0`. This matches the response shape of the code-based `register()` flow.
+
 ## v0.4.5 — 2026-05-10
 
 ### Fixes
