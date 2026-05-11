@@ -59,7 +59,7 @@ class DedupStore:
             ).fetchone()
         if row is None:
             return False
-        return row[0] == st.st_size and row[1] == st.st_mtime
+        return bool(row[0] == st.st_size and row[1] == st.st_mtime)
 
     def mark_seen(self, sha256: str, path: Path) -> None:
         now = datetime.now(UTC).isoformat()
