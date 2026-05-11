@@ -24,6 +24,18 @@ jobs:
       - name: Install uv
         run: pipx install uv
 
+      - name: Derive version from tag
+        id: version
+        run: |
+          $ver = "${{ github.ref_name }}" -replace '^v', ''
+          echo "VERSION=$ver" >> $env:GITHUB_ENV
+        shell: pwsh
+
+      - name: Inject version into source
+        run: |
+          (Get-Content src/deep_analysis_agent/__init__.py) -replace '__version__ = ".*"', "__version__ = `"$env:VERSION`"" | Set-Content src/deep_analysis_agent/__init__.py
+        shell: pwsh
+
       - name: Install deps (dev + build)
         run: uv pip install --system -e ".[dev,build]"
 
@@ -45,18 +57,6 @@ jobs:
 
       - name: Install Clowd.Squirrel
         run: nuget install Clowd.Squirrel -Version 2.11.1 -ExcludeVersion -OutputDirectory tools
-        shell: pwsh
-
-      - name: Derive version from tag
-        id: version
-        run: |
-          $ver = "${{ github.ref_name }}" -replace '^v', ''
-          echo "VERSION=$ver" >> $env:GITHUB_ENV
-        shell: pwsh
-
-      - name: Inject version into source
-        run: |
-          (Get-Content src/deep_analysis_agent/__init__.py) -replace '__version__ = ".*"', "__version__ = `"$env:VERSION`"" | Set-Content src/deep_analysis_agent/__init__.py
         shell: pwsh
 
       - name: Create Squirrel release
