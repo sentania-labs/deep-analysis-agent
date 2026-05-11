@@ -87,3 +87,89 @@ async def test_no_mark_on_ship_failure(
     sha = dedup.hash_file(sample)
     assert dedup.is_seen(sha) is False
     assert tray.states[-1] == "error"
+
+
+async def test_permission_error_retries_then_succeeds(
+    ctx: tuple[AppConfig, DedupStore, _StubTray, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PermissionError on first hash attempt retries and succeeds on second."""
+    cfg, dedup, tray, sample = ctx
+
+    real_hash = dedup.hash_file(sample)
+    call_count = 0
+
+    def _hash_side_effect(path: Path) -> str:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise PermissionError("locked")
+        return real_hash
+
+    monkeypatch.setattr(dedup, "hash_file", _hash_side_effect)
+    monkeypatch.setattr(main_mod, "_HASH_RETRY_DELAY", 0.0)
+
+    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, file_id="f2"))
+    monkeypatch.setattr(shipper, "ship_file", ship_mock)
+
+    log = structlog.get_logger("test")
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), log)  # type: ignore[arg-type]
+
+    assert call_count == 2
+    ship_mock.assert_called_once()
+    assert tray.states[-1] == "idle"
+
+
+async def test_permission_error_exhausts_retries(
+    ctx: tuple[AppConfig, DedupStore, _StubTray, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PermissionError on every attempt gives up after _HASH_RETRIES attempts."""
+    cfg, dedup, tray, sample = ctx
+
+    call_count = 0
+
+    def _always_locked(path: Path) -> str:
+        nonlocal call_count
+        call_count += 1
+        raise PermissionError("locked")
+
+    monkeypatch.setattr(dedup, "hash_file", _always_locked)
+    monkeypatch.setattr(main_mod, "_HASH_RETRIES", 3)
+    monkeypatch.setattr(main_mod, "_HASH_RETRY_DELAY", 0.0)
+
+    ship_mock = AsyncMock()
+    monkeypatch.setattr(shipper, "ship_file", ship_mock)
+
+    log = structlog.get_logger("test")
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), log)  # type: ignore[arg-type]
+
+    assert call_count == 3
+    ship_mock.assert_not_called()
+
+
+async def test_non_permission_oserror_no_retry(
+    ctx: tuple[AppConfig, DedupStore, _StubTray, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-PermissionError OSError fails immediately without retrying."""
+    cfg, dedup, tray, sample = ctx
+
+    call_count = 0
+
+    def _io_error(path: Path) -> str:
+        nonlocal call_count
+        call_count += 1
+        raise OSError("disk failure")
+
+    monkeypatch.setattr(dedup, "hash_file", _io_error)
+    monkeypatch.setattr(main_mod, "_HASH_RETRY_DELAY", 0.0)
+
+    ship_mock = AsyncMock()
+    monkeypatch.setattr(shipper, "ship_file", ship_mock)
+
+    log = structlog.get_logger("test")
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), log)  # type: ignore[arg-type]
+
+    assert call_count == 1
+    ship_mock.assert_not_called()
