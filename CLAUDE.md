@@ -96,6 +96,7 @@ Cross-platform is explicitly out of scope. Don't add platform guards, shims, or 
 - **Tests in `tests/`.** Unit tests for pure logic (dedup, config parsing, stability checks). Integration tests are optional and not required pre-ship for v0.4.0.
 - **Code review protocol:** for non-trivial changes, spawn a subagent to self-review before committing.
 - **Post-v0.4.2 PR discipline.** `main` is protected by the `build-windows` gate (PyInstaller build + frozen-exe smoke test) plus `lint`, `typecheck`, and `test`. Land non-trivial work via feature-branch + PR so CI runs before merge; direct pushes to `main` are reserved for urgent fixes (admin bypass) and still need CI green on the follow-up run. See `CONTRIBUTING.md` for the workflow.
+- **Releases are tag-based.** To cut a release, merge work to `main` via PR (CI green), then `git tag vX.Y.Z && git push origin vX.Y.Z` from `main`. The release workflow builds the PyInstaller binary, packages with Squirrel, and creates a GitHub Release. The version is injected from the tag into `__init__.py` at build time. No version-bump commit is required — the tag is the source of truth.
 
 ## Project structure
 
