@@ -1,4 +1,4 @@
-"""pystray tray scaffold — idle/uploading/error states + right-click menu."""
+"""pystray tray scaffold — idle/uploading/error/paused states + right-click menu."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from .config import AppConfig, load_config
 from .log_viewer import LogViewerWindow
 from .logging import configure_logging, log_file_path
 from .settings_window import SettingsWindow
+from .updater import check_for_update
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ except Exception:  # pragma: no cover
     _TRAY_AVAILABLE = False
 
 
-TrayState = Literal["idle", "uploading", "error", "watcher_disabled"]
+TrayState = Literal["idle", "uploading", "error", "watcher_disabled", "paused"]
 _COLOR_CYCLE = ["W", "U", "B", "R", "G"]
 PIP_CYCLE_SECONDS_PER_COLOR = 2.0
 
@@ -40,6 +41,7 @@ _STATE_LABELS: dict[str, str] = {
     "uploading": "Uploading",
     "error": "Error",
     "watcher_disabled": "Watcher disabled",
+    "paused": "Paused",
 }
 
 _PLACEHOLDER_RGB = {
@@ -76,11 +78,14 @@ class TrayIcon:
         version: str,
         on_reregister: Callable[[], None] | None = None,
         on_reload: Callable[[AppConfig], None] | None = None,
+        on_pause: Callable[[bool], None] | None = None,
     ) -> None:
         self._config = config
         self._version = version
         self._on_reregister = on_reregister
         self._on_reload = on_reload
+        self._on_pause = on_pause
+        self._paused = False
         self._state: TrayState = "idle"
         self._state_lock = threading.Lock()
         self._cycle_stop = threading.Event()
@@ -97,6 +102,8 @@ class TrayIcon:
         with self._state_lock:
             if state == self._state:
                 return
+            if self._paused and state == "idle":
+                return
             self._state = state
         if self._icon is None:
             return
@@ -104,10 +111,9 @@ class TrayIcon:
             self._start_cycle()
         else:
             self._cycle_stop.set()
-            if state == "idle":
+            if state in ("idle", "paused"):
                 self._icon.icon = _load_icon("C")
             else:
-                # "error" + "watcher_disabled" both use the R (red) icon.
                 self._icon.icon = _load_icon("R")
         self._refresh_menu()
 
@@ -141,6 +147,9 @@ class TrayIcon:
         self._cycle_thread = threading.Thread(target=run, name="tray-cycle", daemon=True)
         self._cycle_thread.start()
 
+    def _pause_label(self, _item: Any = None) -> str:
+        return "Resume Sync" if self._paused else "Pause Sync"
+
     def _menu(self) -> Any:
         if pystray is None:
             return None
@@ -150,6 +159,7 @@ class TrayIcon:
             pystray.MenuItem("Open Dashboard", self._open_dashboard),
             pystray.MenuItem("Open Log", self._open_log),
             pystray.MenuItem("Settings", self._open_settings),
+            pystray.MenuItem(self._pause_label, self._toggle_pause),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Check for Updates", self._check_for_updates),
             pystray.MenuItem("About", self._about),
@@ -230,14 +240,42 @@ class TrayIcon:
 
         logger.info("config_reloaded")
 
+    def _toggle_pause(self, *_: Any) -> None:
+        self._paused = not self._paused
+        logger.info("sync_pause_toggled paused=%s", self._paused)
+        if self._paused:
+            self.set_state("paused")
+        else:
+            self.set_state("idle")
+        if self._on_pause is not None:
+            try:
+                self._on_pause(self._paused)
+            except Exception:
+                logger.exception("on_pause callback raised")
+        self._refresh_menu()
+
     def _check_for_updates(self, *_: Any) -> None:
-        message = "Squirrel checks for updates on startup and daily — no manual check needed."
-        logger.info("check_for_updates_clicked note=%s", message)
+        logger.info("check_for_updates_clicked")
         if self._icon is not None:
             try:
-                self._icon.notify(message, "Deep Analysis")
+                self._icon.notify("Checking for updates…", "Deep Analysis")
             except Exception:
                 logger.exception("tray notify failed")
+
+        def _run() -> None:
+            result = check_for_update(self._version)
+            logger.info("update_check_done available=%s msg=%s", result.available, result.message)
+            if result.available:
+                from .updater import apply_update
+
+                apply_update()
+            if self._icon is not None:
+                try:
+                    self._icon.notify(result.message, "Deep Analysis")
+                except Exception:
+                    logger.exception("tray notify failed")
+
+        threading.Thread(target=_run, name="update-check", daemon=True).start()
 
     def _about(self, *_: Any) -> None:
         existing = self._about_window

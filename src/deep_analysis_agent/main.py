@@ -216,6 +216,7 @@ async def _async_main() -> int:
                 stability_seconds=config.mtgo.stability_seconds,
                 on_file_ready=on_file_ready,
                 name_glob=config.mtgo.watched_name_glob,
+                dedup=dedup,
             )
 
         def _on_reload(_new_config: AppConfig) -> None:
@@ -237,11 +238,31 @@ async def _async_main() -> int:
             else:
                 tray.set_state("idle")
 
+        def _on_pause(paused: bool) -> None:
+            if paused:
+                current = watcher_box[0]
+                if current is not None:
+                    current.stop()
+                    log.info("watcher_stopped_by_pause")
+            else:
+                new_watcher = _build_watcher()
+                new_watcher.start()
+                watcher_box[0] = new_watcher
+                if not new_watcher.started:
+                    log.error(
+                        "watcher_not_started_after_resume — MTGO log directory missing",
+                        log_dir=str(config.mtgo.log_dir),
+                    )
+                    tray.set_state("watcher_disabled")
+                else:
+                    log.info("watcher_resumed")
+
         tray = TrayIcon(
             config=config,
             version=__version__,
             on_reregister=_on_reregister,
             on_reload=_on_reload,
+            on_pause=_on_pause,
         )
 
         watcher = _build_watcher()
