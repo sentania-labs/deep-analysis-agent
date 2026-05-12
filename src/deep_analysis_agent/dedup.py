@@ -82,6 +82,14 @@ class DedupStore:
                 (sha256, str(path), now, size, mtime),
             )
 
+    def known_paths(self) -> dict[str, tuple[int | None, float | None]]:
+        """Return all tracked paths as {path_str: (size, mtime)}."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT original_path, file_size, file_mtime FROM seen_files"
+            ).fetchall()
+        return {row[0]: (row[1], row[2]) for row in rows}
+
     def hash_file(self, path: Path) -> str:
         h = hashlib.sha256()
         with path.open("rb") as fh:

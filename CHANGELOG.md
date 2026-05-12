@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.4.10
+
+### What's new
+- **Check for Updates actually checks** — the tray menu item now runs a real Squirrel update check in the background and reports the result via notification, instead of dismissing with "updates are checked at startup."
+- **Pause Sync** — new tray menu toggle to pause/resume file watching and upload without quitting the agent. Files created while paused are picked up on resume.
+- **Bulk startup sync** — startup scan now does a single bulk comparison of the log directory against the dedup DB, only queuing files that are new or changed. Eliminates per-file DB lookups on startup for already-uploaded files.
+
 ## v0.4.7 — 2026-05-10
 
 ### Fixes

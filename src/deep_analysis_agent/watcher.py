@@ -14,10 +14,13 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
+
+if TYPE_CHECKING:
+    from .dedup import DedupStore
 
 logger = logging.getLogger(__name__)
 
@@ -63,12 +66,14 @@ class LogWatcher:
         stability_seconds: float,
         on_file_ready: FileReadyCallback,
         name_glob: str | None = None,
+        dedup: DedupStore | None = None,
     ) -> None:
         self._dir = watch_dir
         self._suffixes = frozenset(s.lower() for s in suffixes)
         self._name_glob = name_glob
         self._stability = stability_seconds
         self._cb = on_file_ready
+        self._dedup = dedup
         self._queue: queue.Queue[Path | None] = queue.Queue()
         self._stop = threading.Event()
         self._worker: threading.Thread | None = None
@@ -117,7 +122,9 @@ class LogWatcher:
     def _startup_scan(self) -> None:
         if not self._dir.exists():
             return
-        count = 0
+        known = self._dedup.known_paths() if self._dedup is not None else None
+        queued = 0
+        skipped = 0
         for p in self._dir.rglob("*"):
             if not p.is_file():
                 continue
@@ -125,9 +132,23 @@ class LogWatcher:
                 continue
             if self._name_glob and not fnmatch.fnmatch(p.name, self._name_glob):
                 continue
+            if known is not None:
+                entry = known.get(str(p))
+                if entry is not None:
+                    try:
+                        st = p.stat()
+                    except OSError:
+                        continue
+                    if entry[0] == st.st_size and entry[1] == st.st_mtime:
+                        skipped += 1
+                        continue
             self._queue.put(p)
-            count += 1
-        logger.info("watcher startup scan queued %d file(s)", count)
+            queued += 1
+        logger.info(
+            "startup_scan queued=%d skipped=%d",
+            queued,
+            skipped,
+        )
 
     def _run(self) -> None:
         while not self._stop.is_set():
