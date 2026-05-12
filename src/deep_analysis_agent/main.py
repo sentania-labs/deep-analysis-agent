@@ -248,7 +248,14 @@ async def _async_main() -> int:
                 new_watcher = _build_watcher()
                 new_watcher.start()
                 watcher_box[0] = new_watcher
-                log.info("watcher_resumed")
+                if not new_watcher.started:
+                    log.error(
+                        "watcher_not_started_after_resume — MTGO log directory missing",
+                        log_dir=str(config.mtgo.log_dir),
+                    )
+                    tray.set_state("watcher_disabled")
+                else:
+                    log.info("watcher_resumed")
 
         tray = TrayIcon(
             config=config,
