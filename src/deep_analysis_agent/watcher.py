@@ -172,6 +172,9 @@ class LogWatcher:
             if item is None:
                 return
             try:
+                if self._dedup is not None and self._dedup.is_path_unchanged(item):
+                    logger.debug("dedup_skip path=%s", item)
+                    continue
                 if self._wait_stable(item):
                     self._cb(item)
             except Exception:
