@@ -123,8 +123,10 @@ class LogWatcher:
         if not self._dir.exists():
             return
         known = self._dedup.known_paths() if self._dedup is not None else None
+        known_sha = self._dedup.known_hashes() if self._dedup is not None else None
         queued = 0
         skipped = 0
+        rehashed = 0
         for p in self._dir.rglob("*"):
             if not p.is_file():
                 continue
@@ -142,12 +144,25 @@ class LogWatcher:
                     if entry[0] == st.st_size and entry[1] == st.st_mtime:
                         skipped += 1
                         continue
+            # Path not in DB or size/mtime changed — check by hash
+            # (no stability gate needed for files already on disk).
+            if known_sha is not None and self._dedup is not None:
+                try:
+                    sha = self._dedup.hash_file(p)
+                except OSError:
+                    continue
+                if sha in known_sha:
+                    self._dedup.mark_seen(sha, p)
+                    skipped += 1
+                    rehashed += 1
+                    continue
             self._queue.put(p)
             queued += 1
         logger.info(
-            "startup_scan queued=%d skipped=%d",
+            "startup_scan queued=%d skipped=%d rehashed=%d",
             queued,
             skipped,
+            rehashed,
         )
 
     def _run(self) -> None:

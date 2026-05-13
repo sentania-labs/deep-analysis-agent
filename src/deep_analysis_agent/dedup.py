@@ -90,6 +90,12 @@ class DedupStore:
             ).fetchall()
         return {row[0]: (row[1], row[2]) for row in rows}
 
+    def known_hashes(self) -> set[str]:
+        """Return all tracked SHA-256 hashes."""
+        with self._lock:
+            rows = self._db.execute("SELECT sha256 FROM seen_files").fetchall()
+        return {row[0] for row in rows}
+
     def hash_file(self, path: Path) -> str:
         h = hashlib.sha256()
         with path.open("rb") as fh:
