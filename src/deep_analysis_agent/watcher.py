@@ -150,12 +150,13 @@ class LogWatcher:
                 try:
                     sha = self._dedup.hash_file(p)
                 except OSError:
-                    continue
-                if sha in known_sha:
-                    self._dedup.mark_seen(sha, p)
-                    skipped += 1
-                    rehashed += 1
-                    continue
+                    pass  # fall through to queue — file may be temporarily locked
+                else:
+                    if sha in known_sha:
+                        self._dedup.mark_seen(sha, p)
+                        skipped += 1
+                        rehashed += 1
+                        continue
             self._queue.put(p)
             queued += 1
         logger.info(
