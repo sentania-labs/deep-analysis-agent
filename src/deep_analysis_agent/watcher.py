@@ -92,6 +92,7 @@ class LogWatcher:
             return
         self._worker = threading.Thread(target=self._run, name="deep-analysis-watcher", daemon=True)
         self._worker.start()
+        self._startup_scan()
         self._observer = Observer()
         self._observer.schedule(
             _Handler(self._enqueue, self._suffixes, self._name_glob),
@@ -99,7 +100,6 @@ class LogWatcher:
             recursive=True,
         )
         self._observer.start()
-        self._startup_scan()
         logger.info("watcher started on %s", self._dir)
 
     def stop(self) -> None:
