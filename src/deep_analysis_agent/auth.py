@@ -42,6 +42,7 @@ class HeartbeatResult:
     registered_at: datetime | None
     revoked: bool
     upload_count: int
+    min_agent_version: str | None
 
 
 def _timeout() -> httpx.Timeout:
@@ -158,4 +159,5 @@ async def heartbeat(
         registered_at=reg_at,
         revoked=bool(data.get("revoked", False)),
         upload_count=int(data.get("upload_count", 0)),
+        min_agent_version=data.get("min_agent_version"),
     )
