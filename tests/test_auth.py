@@ -62,9 +62,7 @@ async def test_heartbeat_sends_local_file_count() -> None:
                 "upload_count": 10,
             },
         )
-        await auth.heartbeat(
-            SERVER, api_token="tok", client_version="0.4.0", local_file_count=950
-        )
+        await auth.heartbeat(SERVER, api_token="tok", client_version="0.4.0", local_file_count=950)
         body = json.loads(route.calls.last.request.content)
     assert body["local_file_count"] == 950
     assert body["client_version"] == "0.4.0"

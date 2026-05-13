@@ -310,8 +310,14 @@ async def _async_main() -> int:
 
         hb_task = asyncio.create_task(
             _heartbeat_loop(
-                config, tray, dedup, watcher_box, _build_watcher,
-                stop_event, revoked_event, log,
+                config,
+                tray,
+                dedup,
+                watcher_box,
+                _build_watcher,
+                stop_event,
+                revoked_event,
+                log,
             ),
             name="heartbeat",
         )
