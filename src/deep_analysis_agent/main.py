@@ -17,7 +17,7 @@ from .dedup import DedupStore
 from .first_run import run_first_run_flow
 from .instance_lock import AlreadyRunningError, InstanceLock
 from .logging import configure_logging, log_file_path
-from .paths import config_path, dedup_path
+from .paths import app_data_dir, config_path, dedup_path
 from .tray import TrayIcon
 from .watcher import LogWatcher
 
@@ -222,15 +222,104 @@ _SQUIRREL_HOOKS = {
 }
 
 
+_MARKER_JUST_UPDATED = "just_updated"
+_MARKER_FIRST_RUN = "first_run_pending"
+
+
+def _write_marker(name: str) -> None:
+    """Write a zero-byte marker file to %LOCALAPPDATA%\\DeepAnalysis\\<name>.
+
+    The main app checks for these on startup and acts on them (e.g. show
+    a toast notification), then deletes the marker.  Best-effort — if the
+    write fails we just log and move on.
+    """
+    try:
+        marker_dir = app_data_dir()
+        marker_dir.mkdir(parents=True, exist_ok=True)
+        (marker_dir / name).write_text(__version__, encoding="utf-8")
+    except Exception:
+        # Marker write is nice-to-have; never block the hook.
+        pass
+
+
 def _handle_squirrel_hooks() -> bool:
     """Return True if a Squirrel hook was handled (caller should exit 0)."""
     if len(sys.argv) < 2:
         return False
     arg = sys.argv[1].lower()
-    # For v0.4.0 all hooks are no-ops — Squirrel's built-in helper handles
-    # shortcut creation/removal. Future versions can add post-update migrations,
-    # re-registration prompts, etc. here.
-    return arg in _SQUIRREL_HOOKS
+    if arg not in _SQUIRREL_HOOKS:
+        return False
+
+    if arg == "--squirrel-updated":
+        _write_marker(_MARKER_JUST_UPDATED)
+    elif arg == "--squirrel-install":
+        _write_marker(_MARKER_FIRST_RUN)
+
+    return True
+
+
+_LAST_VERSION_FILE = ".last_version"
+
+
+def _check_version_upgrade(log: structlog.stdlib.BoundLogger) -> str | None:
+    """Compare current version against the persisted last-run version.
+
+    Returns the *previous* version string when an upgrade is detected (so the
+    caller can show a notification), or None if the version is unchanged or
+    this is the first run.  Writes the current version back to disk either way.
+    """
+    version_file = app_data_dir() / _LAST_VERSION_FILE
+    previous: str | None = None
+    try:
+        if version_file.exists():
+            previous = version_file.read_text(encoding="utf-8").strip()
+    except Exception:
+        log.debug("last_version_read_failed")
+
+    upgraded_from: str | None = None
+    if previous and previous != __version__:
+        upgraded_from = previous
+        log.info("version_upgrade_detected", previous=previous, current=__version__)
+
+    try:
+        version_file.parent.mkdir(parents=True, exist_ok=True)
+        version_file.write_text(__version__, encoding="utf-8")
+    except Exception:
+        log.debug("last_version_write_failed")
+
+    return upgraded_from
+
+
+def _consume_marker(name: str) -> str | None:
+    """Read and delete a Squirrel marker file.  Returns its contents or None."""
+    marker = app_data_dir() / name
+    try:
+        if marker.exists():
+            content = marker.read_text(encoding="utf-8").strip()
+            marker.unlink(missing_ok=True)
+            return content or "unknown"
+    except Exception:
+        pass
+    return None
+
+
+def _schedule_tray_notification(
+    tray: TrayIcon,
+    message: str,
+    title: str = "Deep Analysis",
+    delay: float = 1.5,
+) -> None:
+    """Fire a tray toast after a short delay (gives pystray time to initialise)."""
+
+    def _notify() -> None:
+        import time
+
+        time.sleep(delay)
+        if tray._icon is not None:
+            with contextlib.suppress(Exception):
+                tray._icon.notify(message, title)
+
+    threading.Thread(target=_notify, name="startup-notify", daemon=True).start()
 
 
 async def _async_main() -> int:
@@ -384,6 +473,18 @@ async def _async_main() -> int:
             target=tray.start, args=(_on_quit,), name="tray", daemon=True
         )
         tray_thread.start()
+
+        # --- Startup notifications (Squirrel markers + version-change) ---
+        squirrel_updated = _consume_marker(_MARKER_JUST_UPDATED)
+        squirrel_first_run = _consume_marker(_MARKER_FIRST_RUN)
+        upgraded_from = _check_version_upgrade(log)
+
+        if squirrel_updated:
+            _schedule_tray_notification(tray, f"Deep Analysis updated to v{__version__}")
+        elif squirrel_first_run:
+            _schedule_tray_notification(tray, f"Welcome to Deep Analysis v{__version__}!")
+        elif upgraded_from:
+            _schedule_tray_notification(tray, f"Updated to v{__version__}")
 
         # Wait for quit signal.
         while not quit_event.is_set():
