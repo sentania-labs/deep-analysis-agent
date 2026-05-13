@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import sys
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 import structlog
@@ -44,19 +45,25 @@ def _log_startup_banner(config: AppConfig, log: structlog.stdlib.BoundLogger) ->
 async def _heartbeat_loop(
     config: AppConfig,
     tray: TrayIcon,
+    dedup: DedupStore,
+    watcher_box: list[LogWatcher | None],
+    build_watcher: Callable[[], LogWatcher],
     stop_event: asyncio.Event,
     revoked_event: asyncio.Event,
     log: structlog.stdlib.BoundLogger,
 ) -> None:
     assert config.agent.api_token is not None
+    resync_done = False
     while not stop_event.is_set():
         # Re-read each iteration so SettingsWindow reload picks up new interval.
         interval = max(30, config.agent.heartbeat_interval_seconds)
+        local_count = dedup.count()
         try:
             result = await auth.heartbeat(
                 config.server.url,
                 config.agent.api_token,
                 __version__,
+                local_file_count=local_count,
                 tls_verify=config.server.tls_verify,
             )
         except auth.HeartbeatError as exc:
@@ -73,6 +80,31 @@ async def _heartbeat_loop(
                 revoked_event.set()
                 return
             log.debug("heartbeat_ok", status=result.status)
+
+            # Resync check: trigger once per session if server count is
+            # significantly lower than local dedup count.
+            if (
+                not resync_done
+                and local_count > 0
+                and (
+                    result.upload_count < local_count * 0.8
+                    or local_count - result.upload_count > 50
+                )
+            ):
+                log.warning(
+                    "resync_triggered",
+                    server_count=result.upload_count,
+                    local_count=local_count,
+                )
+                resync_done = True
+                dedup.clear()
+                # Restart the watcher to trigger a fresh startup scan.
+                old = watcher_box[0]
+                if old is not None:
+                    old.stop()
+                new_watcher = build_watcher()
+                new_watcher.start()
+                watcher_box[0] = new_watcher
 
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(stop_event.wait(), timeout=interval)
@@ -277,7 +309,10 @@ async def _async_main() -> int:
             tray.set_state("watcher_disabled")
 
         hb_task = asyncio.create_task(
-            _heartbeat_loop(config, tray, stop_event, revoked_event, log),
+            _heartbeat_loop(
+                config, tray, dedup, watcher_box, _build_watcher,
+                stop_event, revoked_event, log,
+            ),
             name="heartbeat",
         )
 
