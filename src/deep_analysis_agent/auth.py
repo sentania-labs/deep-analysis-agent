@@ -41,6 +41,7 @@ class HeartbeatResult:
     status: str
     registered_at: datetime | None
     revoked: bool
+    upload_count: int
 
 
 def _timeout() -> httpx.Timeout:
@@ -123,12 +124,16 @@ async def heartbeat(
     server_url: str,
     api_token: str,
     client_version: str,
+    local_file_count: int = 0,
     tls_verify: bool | str = True,
 ) -> HeartbeatResult:
     """POST /auth/agent/heartbeat with the bearer token."""
     url = server_url.rstrip("/") + "/auth/agent/heartbeat"
     headers = {"Authorization": f"Bearer {api_token}"}
-    payload = {"client_version": client_version}
+    payload: dict[str, str | int] = {
+        "client_version": client_version,
+        "local_file_count": local_file_count,
+    }
     try:
         async with httpx.AsyncClient(timeout=_timeout(), verify=tls_verify) as client:
             resp = await client.post(url, headers=headers, json=payload)
@@ -152,4 +157,5 @@ async def heartbeat(
         status=str(data.get("status", "")),
         registered_at=reg_at,
         revoked=bool(data.get("revoked", False)),
+        upload_count=int(data.get("upload_count", 0)),
     )

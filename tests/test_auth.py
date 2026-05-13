@@ -41,12 +41,45 @@ async def test_heartbeat_success() -> None:
                 "status": "ok",
                 "registered_at": "2026-04-23T14:55:00Z",
                 "revoked": False,
+                "upload_count": 42,
             },
         )
         result = await auth.heartbeat(SERVER, api_token="tok", client_version="0.4.0")
     assert result.status == "ok"
     assert result.revoked is False
     assert result.registered_at is not None
+    assert result.upload_count == 42
+
+
+async def test_heartbeat_sends_local_file_count() -> None:
+    async with respx.mock(base_url=SERVER) as mock:
+        route = mock.post("/auth/agent/heartbeat").respond(
+            200,
+            json={
+                "status": "ok",
+                "registered_at": "2026-04-23T14:55:00Z",
+                "revoked": False,
+                "upload_count": 10,
+            },
+        )
+        await auth.heartbeat(SERVER, api_token="tok", client_version="0.4.0", local_file_count=950)
+        body = json.loads(route.calls.last.request.content)
+    assert body["local_file_count"] == 950
+    assert body["client_version"] == "0.4.0"
+
+
+async def test_heartbeat_upload_count_defaults_to_zero() -> None:
+    async with respx.mock(base_url=SERVER) as mock:
+        mock.post("/auth/agent/heartbeat").respond(
+            200,
+            json={
+                "status": "ok",
+                "registered_at": "2026-04-23T14:55:00Z",
+                "revoked": False,
+            },
+        )
+        result = await auth.heartbeat(SERVER, api_token="tok", client_version="0.4.0")
+    assert result.upload_count == 0
 
 
 async def test_heartbeat_revoked() -> None:
@@ -57,6 +90,7 @@ async def test_heartbeat_revoked() -> None:
                 "status": "ok",
                 "registered_at": "2026-04-23T14:55:00Z",
                 "revoked": True,
+                "upload_count": 0,
             },
         )
         result = await auth.heartbeat(SERVER, api_token="tok", client_version="0.4.0")

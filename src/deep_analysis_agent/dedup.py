@@ -90,6 +90,17 @@ class DedupStore:
             ).fetchall()
         return {row[0]: (row[1], row[2]) for row in rows}
 
+    def count(self) -> int:
+        """Return the number of entries in the seen-files table."""
+        with self._lock:
+            row = self._db.execute("SELECT COUNT(*) FROM seen_files").fetchone()
+        return int(row[0]) if row else 0
+
+    def clear(self) -> None:
+        """Delete all entries from the seen-files table (nuclear resync)."""
+        with self._lock:
+            self._db.execute("DELETE FROM seen_files")
+
     def known_hashes(self) -> set[str]:
         """Return all tracked SHA-256 hashes."""
         with self._lock:
