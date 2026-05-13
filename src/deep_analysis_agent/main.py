@@ -27,6 +27,17 @@ _HASH_RETRIES = 3
 _HASH_RETRY_DELAY = 2.0
 
 
+def _parse_version(v: str) -> tuple[int, ...]:
+    """Parse a dotted version string into a tuple of ints for comparison."""
+    parts: list[int] = []
+    for segment in v.strip().split("."):
+        try:
+            parts.append(int(segment))
+        except ValueError:
+            break
+    return tuple(parts)
+
+
 def _log_startup_banner(config: AppConfig, log: structlog.stdlib.BoundLogger) -> None:
     log.info(_STARTUP_BANNER_RULE)
     log.info("Deep Analysis agent starting", version=__version__)
@@ -54,6 +65,7 @@ async def _heartbeat_loop(
 ) -> None:
     assert config.agent.api_token is not None
     resync_done = False
+    version_warned = False
     while not stop_event.is_set():
         # Re-read each iteration so SettingsWindow reload picks up new interval.
         interval = max(30, config.agent.heartbeat_interval_seconds)
@@ -81,6 +93,28 @@ async def _heartbeat_loop(
                 return
             log.debug("heartbeat_ok", status=result.status)
 
+            # Version floor check — warn once per session.
+            if not version_warned and result.min_agent_version:
+                agent_ver = _parse_version(__version__)
+                required_ver = _parse_version(result.min_agent_version)
+                if agent_ver < required_ver:
+                    version_warned = True
+                    log.warning(
+                        "version_below_minimum",
+                        agent=__version__,
+                        required=result.min_agent_version,
+                    )
+                    tray.set_state("error")
+                    if tray._icon is not None:
+                        try:
+                            tray._icon.notify(
+                                f"Update required: server requires agent "
+                                f"v{result.min_agent_version} or newer",
+                                "Deep Analysis",
+                            )
+                        except Exception:
+                            log.debug("tray_notify_failed")
+
             # Resync check: trigger once per session if server count is
             # significantly lower than local dedup count.
             if (
@@ -107,6 +141,7 @@ async def _heartbeat_loop(
                     new_watcher = build_watcher()
                     new_watcher.start()
                     watcher_box[0] = new_watcher
+                    tray.set_state("uploading")
                 else:
                     log.info("resync_deferred_paused")
 

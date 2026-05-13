@@ -181,3 +181,34 @@ async def test_register_with_credentials_network_error() -> None:
             await auth.register_with_credentials(
                 SERVER, email="u@x", password="x", agent_name="m", client_version="0.4.5"
             )
+
+
+async def test_heartbeat_parses_min_agent_version() -> None:
+    async with respx.mock(base_url=SERVER) as mock:
+        mock.post("/auth/agent/heartbeat").respond(
+            200,
+            json={
+                "status": "ok",
+                "registered_at": "2026-04-23T14:55:00Z",
+                "revoked": False,
+                "upload_count": 10,
+                "min_agent_version": "0.5.0",
+            },
+        )
+        result = await auth.heartbeat(SERVER, api_token="tok", client_version="0.4.8")
+    assert result.min_agent_version == "0.5.0"
+
+
+async def test_heartbeat_min_agent_version_defaults_to_none() -> None:
+    async with respx.mock(base_url=SERVER) as mock:
+        mock.post("/auth/agent/heartbeat").respond(
+            200,
+            json={
+                "status": "ok",
+                "registered_at": "2026-04-23T14:55:00Z",
+                "revoked": False,
+                "upload_count": 10,
+            },
+        )
+        result = await auth.heartbeat(SERVER, api_token="tok", client_version="0.4.8")
+    assert result.min_agent_version is None

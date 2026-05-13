@@ -7,13 +7,13 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import structlog
 
+from deep_analysis_agent import auth, shipper
 from deep_analysis_agent import main as main_mod
-from deep_analysis_agent import shipper
 from deep_analysis_agent.config import AppConfig
 from deep_analysis_agent.dedup import DedupStore
 
@@ -173,3 +173,233 @@ async def test_non_permission_oserror_no_retry(
 
     assert call_count == 1
     ship_mock.assert_not_called()
+
+
+# --- _parse_version ---
+
+
+def test_parse_version_simple() -> None:
+    assert main_mod._parse_version("0.4.8") == (0, 4, 8)
+
+
+def test_parse_version_two_part() -> None:
+    assert main_mod._parse_version("1.0") == (1, 0)
+
+
+def test_parse_version_single() -> None:
+    assert main_mod._parse_version("3") == (3,)
+
+
+def test_parse_version_stops_at_non_numeric() -> None:
+    assert main_mod._parse_version("1.2.3rc1") == (1, 2)
+
+
+def test_parse_version_comparison() -> None:
+    assert main_mod._parse_version("0.4.8") < main_mod._parse_version("0.5.0")
+    assert main_mod._parse_version("0.5.0") == main_mod._parse_version("0.5.0")
+    assert main_mod._parse_version("1.0.0") > main_mod._parse_version("0.99.99")
+
+
+# --- _heartbeat_loop: version floor check ---
+
+
+class _StubTrayWithNotify:
+    """Tray stub that also tracks notify calls."""
+
+    def __init__(self) -> None:
+        self.states: list[str] = []
+        self._paused = False
+        self._icon = MagicMock()
+
+    def set_state(self, s: str) -> None:
+        self.states.append(s)
+
+
+async def test_heartbeat_version_below_minimum_warns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When server requires a higher version, tray goes to error and notify fires."""
+    cfg = AppConfig()
+    cfg.server.url = "https://example.test"
+    cfg.agent.api_token = "tok"
+    cfg.agent.heartbeat_interval_seconds = 30
+    dedup = DedupStore(tmp_path / "dedup.db")
+    tray = _StubTrayWithNotify()
+    log = structlog.get_logger("test")
+    stop = asyncio.Event()
+    revoked = asyncio.Event()
+    watcher_box: list[None] = [None]
+
+    call_count = 0
+
+    async def _fake_heartbeat(*_a: object, **_kw: object) -> auth.HeartbeatResult:
+        nonlocal call_count
+        call_count += 1
+        # Stop after first iteration to avoid infinite loop.
+        stop.set()
+        return auth.HeartbeatResult(
+            status="ok",
+            registered_at=None,
+            revoked=False,
+            upload_count=0,
+            min_agent_version="99.0.0",
+        )
+
+    monkeypatch.setattr(auth, "heartbeat", _fake_heartbeat)
+
+    await main_mod._heartbeat_loop(
+        cfg,
+        tray,
+        dedup,
+        watcher_box,
+        lambda: None,
+        stop,
+        revoked,
+        log,  # type: ignore[arg-type]
+    )
+    assert "error" in tray.states
+    tray._icon.notify.assert_called_once()
+    msg = tray._icon.notify.call_args[0][0]
+    assert "99.0.0" in msg
+
+
+async def test_heartbeat_version_ok_no_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When agent meets the minimum version, no error state is set."""
+    cfg = AppConfig()
+    cfg.server.url = "https://example.test"
+    cfg.agent.api_token = "tok"
+    cfg.agent.heartbeat_interval_seconds = 30
+    dedup = DedupStore(tmp_path / "dedup.db")
+    tray = _StubTrayWithNotify()
+    log = structlog.get_logger("test")
+    stop = asyncio.Event()
+    revoked = asyncio.Event()
+    watcher_box: list[None] = [None]
+
+    async def _fake_heartbeat(*_a: object, **_kw: object) -> auth.HeartbeatResult:
+        stop.set()
+        return auth.HeartbeatResult(
+            status="ok",
+            registered_at=None,
+            revoked=False,
+            upload_count=0,
+            min_agent_version="0.1.0",
+        )
+
+    monkeypatch.setattr(auth, "heartbeat", _fake_heartbeat)
+
+    await main_mod._heartbeat_loop(
+        cfg,
+        tray,
+        dedup,
+        watcher_box,
+        lambda: None,
+        stop,
+        revoked,
+        log,  # type: ignore[arg-type]
+    )
+    assert "error" not in tray.states
+    tray._icon.notify.assert_not_called()
+
+
+async def test_heartbeat_version_warn_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The version warning fires only once per session, not every heartbeat."""
+    cfg = AppConfig()
+    cfg.server.url = "https://example.test"
+    cfg.agent.api_token = "tok"
+    cfg.agent.heartbeat_interval_seconds = 30
+    dedup = DedupStore(tmp_path / "dedup.db")
+    tray = _StubTrayWithNotify()
+    log = structlog.get_logger("test")
+    stop = asyncio.Event()
+    revoked = asyncio.Event()
+    watcher_box: list[None] = [None]
+
+    call_count = 0
+
+    async def _fake_heartbeat(*_a: object, **_kw: object) -> auth.HeartbeatResult:
+        nonlocal call_count
+        call_count += 1
+        if call_count >= 3:
+            stop.set()
+        return auth.HeartbeatResult(
+            status="ok",
+            registered_at=None,
+            revoked=False,
+            upload_count=0,
+            min_agent_version="99.0.0",
+        )
+
+    monkeypatch.setattr(auth, "heartbeat", _fake_heartbeat)
+
+    await main_mod._heartbeat_loop(
+        cfg,
+        tray,
+        dedup,
+        watcher_box,
+        lambda: None,
+        stop,
+        revoked,
+        log,  # type: ignore[arg-type]
+    )
+    # notify should have been called exactly once despite multiple heartbeats.
+    assert tray._icon.notify.call_count == 1
+
+
+# --- _heartbeat_loop: resync sets tray to uploading ---
+
+
+async def test_resync_sets_tray_uploading(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """After a resync triggers a watcher restart, the tray shows uploading."""
+    cfg = AppConfig()
+    cfg.server.url = "https://example.test"
+    cfg.agent.api_token = "tok"
+    cfg.agent.heartbeat_interval_seconds = 30
+    dedup = DedupStore(tmp_path / "dedup.db")
+    # Seed the dedup store with some entries so local_count > 0.
+    for i in range(10):
+        dedup.mark_seen(f"sha{i:04d}", tmp_path / f"file{i}.dat")
+
+    tray = _StubTrayWithNotify()
+    log = structlog.get_logger("test")
+    stop = asyncio.Event()
+    revoked = asyncio.Event()
+
+    watcher_started = False
+
+    class _FakeWatcher:
+        def start(self) -> None:
+            nonlocal watcher_started
+            watcher_started = True
+
+        def stop(self) -> None:
+            pass
+
+    watcher_box: list[_FakeWatcher | None] = [_FakeWatcher()]
+
+    async def _fake_heartbeat(*_a: object, **_kw: object) -> auth.HeartbeatResult:
+        stop.set()
+        return auth.HeartbeatResult(
+            status="ok",
+            registered_at=None,
+            revoked=False,
+            upload_count=0,  # server says 0, local has 10 => triggers resync
+            min_agent_version=None,
+        )
+
+    monkeypatch.setattr(auth, "heartbeat", _fake_heartbeat)
+
+    await main_mod._heartbeat_loop(
+        cfg,
+        tray,
+        dedup,
+        watcher_box,
+        _FakeWatcher,
+        stop,
+        revoked,
+        log,  # type: ignore[arg-type]
+    )
+    assert "uploading" in tray.states
+    assert watcher_started
