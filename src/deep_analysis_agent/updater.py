@@ -40,7 +40,7 @@ def check_for_update(current_version: str) -> UpdateCheckResult:
 
     try:
         proc = subprocess.run(
-            [str(update_exe), "check", "--url", _UPDATE_URL],
+            [str(update_exe), f"--checkForUpdate={_UPDATE_URL}"],
             capture_output=True,
             text=True,
             timeout=_CHECK_TIMEOUT,
@@ -60,14 +60,18 @@ def check_for_update(current_version: str) -> UpdateCheckResult:
         proc.stderr.strip(),
     )
 
-    if proc.returncode == 0 and not stdout:
+    if proc.returncode != 0:
+        logger.warning("update_check_nonzero returncode=%d", proc.returncode)
+        return UpdateCheckResult(
+            available=False,
+            message=f"Update check failed (exit {proc.returncode}).",
+        )
+
+    if not stdout:
         return UpdateCheckResult(
             available=False,
             message=f"You're up to date (v{current_version}).",
         )
-
-    if stdout:
-        return UpdateCheckResult(available=True, message=stdout)
 
     return UpdateCheckResult(
         available=True,
@@ -81,7 +85,7 @@ def apply_update() -> bool:
         return False
     try:
         subprocess.Popen(
-            [str(update_exe), "download", "--url", _UPDATE_URL],
+            [str(update_exe), f"--update={_UPDATE_URL}"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
