@@ -271,7 +271,8 @@ class TrayIcon:
                 apply_update()
             if self._icon is not None:
                 try:
-                    self._icon.notify(result.message, "Deep Analysis")
+                    msg = result.message[:256] if len(result.message) > 256 else result.message
+                    self._icon.notify(msg, "Deep Analysis")
                 except Exception:
                     logger.exception("tray notify failed")
 
