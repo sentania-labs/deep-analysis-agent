@@ -98,13 +98,17 @@ async def _heartbeat_loop(
                 )
                 resync_done = True
                 dedup.clear()
-                # Restart the watcher to trigger a fresh startup scan.
-                old = watcher_box[0]
-                if old is not None:
-                    old.stop()
-                new_watcher = build_watcher()
-                new_watcher.start()
-                watcher_box[0] = new_watcher
+                # Restart the watcher to trigger a fresh startup scan,
+                # but respect the user's pause state.
+                if not tray._paused:
+                    old = watcher_box[0]
+                    if old is not None:
+                        old.stop()
+                    new_watcher = build_watcher()
+                    new_watcher.start()
+                    watcher_box[0] = new_watcher
+                else:
+                    log.info("resync_deferred_paused")
 
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(stop_event.wait(), timeout=interval)
