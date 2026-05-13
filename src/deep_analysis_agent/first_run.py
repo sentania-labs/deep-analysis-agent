@@ -82,40 +82,72 @@ def _prompt_code() -> str | None:
 
 
 def _prompt_method_tk() -> int | None:
-    """Ask the user which registration method to use via tkinter.
+    """Ask the user which registration method to use via a tkinter radio-button dialog.
 
     Returns 1 for email/password, 2 for registration code, None if the
     user cancelled. Returns -1 if tkinter is unavailable.
     """
     try:
         import tkinter as tk
-        from tkinter import simpledialog
+        from tkinter import ttk
     except ImportError:
         return -1
 
+    result: list[int | None] = [None]
+
     try:
         root = tk.Tk()
-        root.withdraw()
-        for _ in range(2):
-            answer = simpledialog.askstring(
-                "Deep Analysis — Register",
-                "Enter 1 for Email/Password or 2 for Registration Code:",
-            )
-            if answer is None:
-                root.destroy()
-                return None
-            answer = answer.strip()
-            if answer == "1":
-                root.destroy()
-                return 1
-            if answer == "2":
-                root.destroy()
-                return 2
-        root.destroy()
-        return None
+        root.title("Deep Analysis — Register")
+        root.resizable(False, False)
+
+        frame = ttk.Frame(root, padding=16)
+        frame.grid(row=0, column=0, sticky="nsew")
+
+        ttk.Label(
+            frame,
+            text="How would you like to register?",
+            font=("TkDefaultFont", 10, "bold"),
+        ).grid(row=0, column=0, sticky="w", pady=(0, 12))
+
+        method_var = tk.IntVar(value=1)
+
+        ttk.Radiobutton(
+            frame,
+            text="Sign in with email + password",
+            variable=method_var,
+            value=1,
+        ).grid(row=1, column=0, sticky="w", pady=2)
+
+        ttk.Radiobutton(
+            frame,
+            text="Use registration code",
+            variable=method_var,
+            value=2,
+        ).grid(row=2, column=0, sticky="w", pady=2)
+
+        def _ok() -> None:
+            result[0] = method_var.get()
+            root.destroy()
+
+        def _cancel() -> None:
+            root.destroy()
+
+        btn_frame = ttk.Frame(frame)
+        btn_frame.grid(row=3, column=0, sticky="ew", pady=(16, 0))
+        btn_frame.columnconfigure(0, weight=1)
+        ttk.Button(btn_frame, text="Cancel", command=_cancel).grid(
+            row=0, column=0, sticky="e", padx=(0, 6)
+        )
+        ok_btn = ttk.Button(btn_frame, text="OK", command=_ok)
+        ok_btn.grid(row=0, column=1, sticky="e")
+
+        root.protocol("WM_DELETE_WINDOW", _cancel)
+        root.mainloop()
     except Exception:
         logger.exception("tkinter method-prompt failed")
         return -1
+
+    return result[0]
 
 
 def _prompt_method_stdin() -> int | None:
