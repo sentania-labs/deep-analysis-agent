@@ -92,7 +92,6 @@ class LogWatcher:
             return
         self._worker = threading.Thread(target=self._run, name="deep-analysis-watcher", daemon=True)
         self._worker.start()
-        self._startup_scan()
         self._observer = Observer()
         self._observer.schedule(
             _Handler(self._enqueue, self._suffixes, self._name_glob),
@@ -100,6 +99,7 @@ class LogWatcher:
             recursive=True,
         )
         self._observer.start()
+        self._startup_scan()
         logger.info("watcher started on %s", self._dir)
 
     def stop(self) -> None:
@@ -172,6 +172,9 @@ class LogWatcher:
             if item is None:
                 return
             try:
+                if self._dedup is not None and self._dedup.is_path_unchanged(item):
+                    logger.debug("dedup_skip path=%s", item)
+                    continue
                 if self._wait_stable(item):
                     self._cb(item)
             except Exception:
