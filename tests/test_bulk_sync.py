@@ -33,7 +33,7 @@ def test_startup_scan_skips_known_unchanged_files(tmp_path: Path) -> None:
         suffixes=frozenset({".dat"}),
         stability_seconds=0.2,
         on_file_ready=seen.append,
-        name_glob="Match_GameLog_*.dat",
+        name_globs=["Match_GameLog_*.dat"],
         dedup=db,
     )
     watcher.start()
@@ -64,7 +64,7 @@ def test_startup_scan_queues_new_files(tmp_path: Path) -> None:
         suffixes=frozenset({".dat"}),
         stability_seconds=0.2,
         on_file_ready=on_ready,
-        name_glob="Match_GameLog_*.dat",
+        name_globs=["Match_GameLog_*.dat"],
         dedup=db,
     )
     watcher.start()
@@ -99,7 +99,7 @@ def test_startup_scan_queues_changed_files(tmp_path: Path) -> None:
         suffixes=frozenset({".dat"}),
         stability_seconds=0.2,
         on_file_ready=on_ready,
-        name_glob="Match_GameLog_*.dat",
+        name_globs=["Match_GameLog_*.dat"],
         dedup=db,
     )
     watcher.start()
@@ -150,7 +150,7 @@ def test_startup_scan_skips_relocated_files_by_hash(tmp_path: Path) -> None:
         suffixes=frozenset({".dat"}),
         stability_seconds=0.2,
         on_file_ready=seen.append,
-        name_glob="Match_GameLog_*.dat",
+        name_globs=["Match_GameLog_*.dat"],
         dedup=db,
     )
     watcher.start()

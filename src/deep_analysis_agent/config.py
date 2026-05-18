@@ -46,8 +46,10 @@ def _default_mtgo_log_dir() -> Path:
 
 class MTGOSettings(BaseModel):
     log_dir: Path = Field(default_factory=_default_mtgo_log_dir)
-    watched_suffixes: list[str] = Field(default_factory=lambda: [".dat", ".log"])
-    watched_name_glob: str | None = "Match_GameLog_*.dat"
+    watched_suffixes: list[str] = Field(default_factory=lambda: [".dat", ".log", ".xml"])
+    watched_name_globs: list[str] = Field(
+        default_factory=lambda: ["Match_GameLog_*.dat", "grouping *.xml"]
+    )
     stability_seconds: float = 5.0
 
 

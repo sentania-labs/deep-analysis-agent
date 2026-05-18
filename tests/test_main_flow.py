@@ -351,6 +351,82 @@ async def test_heartbeat_version_warn_once(tmp_path: Path, monkeypatch: pytest.M
 # --- _heartbeat_loop: resync sets tray to uploading ---
 
 
+# --- detect_content_type ---
+
+
+def test_detect_content_type_match_log() -> None:
+    assert main_mod.detect_content_type("Match_GameLog_12345.dat") == "match-log"
+
+
+def test_detect_content_type_decklist() -> None:
+    assert main_mod.detect_content_type("grouping 98765.xml") == "decklist"
+
+
+def test_detect_content_type_unknown() -> None:
+    assert main_mod.detect_content_type("random_file.txt") == "unknown"
+
+
+def test_detect_content_type_decklist_various_ids() -> None:
+    assert main_mod.detect_content_type("grouping 1.xml") == "decklist"
+    assert main_mod.detect_content_type("grouping 999999999.xml") == "decklist"
+
+
+def test_detect_content_type_not_grouping_without_space() -> None:
+    """'grouping' without a space and ID should not match the decklist pattern."""
+    assert main_mod.detect_content_type("grouping.xml") == "unknown"
+
+
+# --- _handle_file passes content_type and original_filename ---
+
+
+async def test_handle_file_passes_content_type_decklist(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When handling a grouping XML file, ship_file receives content_type=decklist."""
+    cfg = AppConfig()
+    cfg.server.url = "https://example.test"
+    cfg.agent.api_token = "tok"
+    dedup = DedupStore(tmp_path / "dedup.db")
+    tray = _StubTray()
+    sample = tmp_path / "grouping 12345.xml"
+    sample.write_bytes(b"<grouping>deck</grouping>")
+
+    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, file_id="f1"))
+    monkeypatch.setattr(shipper, "ship_file", ship_mock)
+
+    log = structlog.get_logger("test")
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), log)  # type: ignore[arg-type]
+
+    ship_mock.assert_called_once()
+    call_kwargs = ship_mock.call_args
+    assert call_kwargs.kwargs["content_type"] == "decklist"
+    assert call_kwargs.kwargs["original_filename"] == "grouping 12345.xml"
+
+
+async def test_handle_file_passes_content_type_match_log(
+    ctx: tuple[AppConfig, DedupStore, _StubTray, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When handling a .dat match log, ship_file receives content_type=match-log."""
+    cfg, dedup, tray, sample = ctx
+
+    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, file_id="f2"))
+    monkeypatch.setattr(shipper, "ship_file", ship_mock)
+
+    log = structlog.get_logger("test")
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), log)  # type: ignore[arg-type]
+
+    ship_mock.assert_called_once()
+    call_kwargs = ship_mock.call_args
+    # sample is "match.dat" which does NOT match "Match_GameLog_*.dat", so it's "unknown"
+    assert call_kwargs.kwargs["content_type"] == "unknown"
+    assert call_kwargs.kwargs["original_filename"] == "match.dat"
+
+
+# --- _heartbeat_loop: resync sets tray to uploading ---
+
+
 async def test_resync_sets_tray_uploading(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """After a resync triggers a watcher restart, the tray shows uploading."""
     cfg = AppConfig()

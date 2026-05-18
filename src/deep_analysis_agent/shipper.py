@@ -41,12 +41,16 @@ async def ship_file(
     path: Path,
     sha256: str,
     tls_verify: bool | str = True,
+    content_type: str = "match-log",
+    original_filename: str | None = None,
 ) -> UploadResult:
     """Upload a single file to POST /ingest/upload.
 
     The request body is `multipart/form-data` with:
       - file: the raw file contents
       - sha256: the precomputed hash (server may verify)
+      - content_type: "match-log", "decklist", or "unknown"
+      - original_filename: the original name of the file on disk (optional)
 
     Authorization: Bearer <api_token>.
     """
@@ -58,7 +62,9 @@ async def ship_file(
         try:
             with path.open("rb") as fh:
                 files = {"file": (path.name, fh, "application/octet-stream")}
-                data = {"sha256": sha256}
+                data: dict[str, str] = {"sha256": sha256, "content_type": content_type}
+                if original_filename is not None:
+                    data["original_filename"] = original_filename
                 async with httpx.AsyncClient(timeout=_timeout(), verify=tls_verify) as client:
                     resp = await client.post(url, headers=headers, files=files, data=data)
         except httpx.HTTPError as exc:

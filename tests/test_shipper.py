@@ -59,3 +59,70 @@ async def test_ship_5xx_exhausts(sample_file: Path) -> None:
         mock.post("/ingest/upload").respond(502, json={"error": "bad gateway"})
         with pytest.raises(shipper.ShipError):
             await shipper.ship_file(SERVER, "tok", sample_file, sha256="a" * 64)
+
+
+async def test_ship_sends_content_type(sample_file: Path) -> None:
+    """content_type form field is included in the upload request."""
+
+    def _capture(request: object) -> Response:
+        # respx passes an httpx.Request; extract multipart fields.
+        import httpx
+
+        assert isinstance(request, httpx.Request)
+        # The multipart body is already encoded; check the raw bytes.
+        body = request.content
+        assert b"content_type" in body
+        assert b"decklist" in body
+        return Response(200, json={"deduped": False, "file_id": "x1"})
+
+    async with respx.mock(base_url=SERVER) as mock:
+        mock.post("/ingest/upload").mock(side_effect=_capture)
+        result = await shipper.ship_file(
+            SERVER,
+            "tok",
+            sample_file,
+            sha256="a" * 64,
+            content_type="decklist",
+        )
+    assert result.file_id == "x1"
+
+
+async def test_ship_sends_original_filename(sample_file: Path) -> None:
+    """original_filename form field is included when provided."""
+    import httpx
+
+    def _capture(request: object) -> Response:
+        assert isinstance(request, httpx.Request)
+        body = request.content
+        assert b"original_filename" in body
+        assert b"grouping 12345.xml" in body
+        return Response(200, json={"deduped": False, "file_id": "x2"})
+
+    async with respx.mock(base_url=SERVER) as mock:
+        mock.post("/ingest/upload").mock(side_effect=_capture)
+        result = await shipper.ship_file(
+            SERVER,
+            "tok",
+            sample_file,
+            sha256="a" * 64,
+            content_type="decklist",
+            original_filename="grouping 12345.xml",
+        )
+    assert result.file_id == "x2"
+
+
+async def test_ship_default_content_type(sample_file: Path) -> None:
+    """Default content_type is match-log when not specified."""
+    import httpx
+
+    def _capture(request: object) -> Response:
+        assert isinstance(request, httpx.Request)
+        body = request.content
+        assert b"content_type" in body
+        assert b"match-log" in body
+        return Response(200, json={"deduped": False, "file_id": "x3"})
+
+    async with respx.mock(base_url=SERVER) as mock:
+        mock.post("/ingest/upload").mock(side_effect=_capture)
+        result = await shipper.ship_file(SERVER, "tok", sample_file, sha256="a" * 64)
+    assert result.file_id == "x3"

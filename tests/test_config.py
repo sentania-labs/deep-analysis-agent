@@ -18,6 +18,7 @@ def test_defaults_load_without_config_file(tmp_path: Path, monkeypatch) -> None:
     assert cfg.server.tls_verify is True
     assert cfg.logging.level == "INFO"
     assert ".dat" in cfg.mtgo.watched_suffixes
+    assert ".xml" in cfg.mtgo.watched_suffixes
 
 
 def test_env_override_nested(tmp_path: Path, monkeypatch) -> None:

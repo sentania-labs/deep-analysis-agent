@@ -35,17 +35,19 @@ class _Handler(FileSystemEventHandler):
         self,
         enqueue: Callable[[Path], None],
         suffixes: frozenset[str],
-        name_glob: str | None,
+        name_globs: list[str] | None,
     ) -> None:
         self._enqueue = enqueue
         self._suffixes = suffixes
-        self._name_glob = name_glob
+        self._name_globs = name_globs
 
     def _maybe(self, path_str: str) -> None:
         path = Path(path_str)
         if path.suffix.lower() not in self._suffixes:
             return
-        if self._name_glob and not fnmatch.fnmatch(path.name, self._name_glob):
+        if self._name_globs and not any(
+            fnmatch.fnmatch(path.name, g) for g in self._name_globs
+        ):
             return
         self._enqueue(path)
 
@@ -65,12 +67,12 @@ class LogWatcher:
         suffixes: frozenset[str],
         stability_seconds: float,
         on_file_ready: FileReadyCallback,
-        name_glob: str | None = None,
+        name_globs: list[str] | None = None,
         dedup: DedupStore | None = None,
     ) -> None:
         self._dir = watch_dir
         self._suffixes = frozenset(s.lower() for s in suffixes)
-        self._name_glob = name_glob
+        self._name_globs = name_globs
         self._stability = stability_seconds
         self._cb = on_file_ready
         self._dedup = dedup
@@ -94,7 +96,7 @@ class LogWatcher:
         self._worker.start()
         self._observer = Observer()
         self._observer.schedule(
-            _Handler(self._enqueue, self._suffixes, self._name_glob),
+            _Handler(self._enqueue, self._suffixes, self._name_globs),
             str(self._dir),
             recursive=True,
         )
@@ -132,7 +134,9 @@ class LogWatcher:
                 continue
             if p.suffix.lower() not in self._suffixes:
                 continue
-            if self._name_glob and not fnmatch.fnmatch(p.name, self._name_glob):
+            if self._name_globs and not any(
+                fnmatch.fnmatch(p.name, g) for g in self._name_globs
+            ):
                 continue
             if known is not None:
                 entry = known.get(str(p))
