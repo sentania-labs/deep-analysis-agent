@@ -137,10 +137,6 @@ async def check_and_ship(
     failed = 0
     for xml_file in xml_files:
         sha = dedup.hash_file(xml_file)
-        if dedup.is_seen(sha):
-            log.debug("card_data_source_file_deduped", file=xml_file.name)
-            shipped += 1
-            continue
         try:
             result = await ship_file(
                 config.server.url,

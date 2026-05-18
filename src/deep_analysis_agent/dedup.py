@@ -106,9 +106,10 @@ class DedupStore:
         return int(row[0]) if row else 0
 
     def clear(self) -> None:
-        """Delete all entries from the seen-files table (nuclear resync)."""
+        """Delete all entries from seen-files and meta tables (nuclear resync)."""
         with self._lock:
             self._db.execute("DELETE FROM seen_files")
+            self._db.execute("DELETE FROM meta")
 
     def known_hashes(self) -> set[str]:
         """Return all tracked SHA-256 hashes."""

@@ -392,11 +392,11 @@ async def test_check_and_ship_preserves_original_filename(
     assert filenames == {"CARDNAME_STRING.xml", "client_10E.xml", "client_MH3.xml"}
 
 
-async def test_check_and_ship_dedup_skips_unchanged_files(
+async def test_check_and_ship_always_ships_all_files(
     cds_setup: tuple[AppConfig, DedupStore, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Files already in dedup store are skipped (no ship_file call)."""
+    """All files are shipped even if already in dedup store (server deduplicates)."""
     cfg, dedup, cds_dir = cds_setup
 
     # Pre-mark one file as seen.
@@ -409,7 +409,7 @@ async def test_check_and_ship_dedup_skips_unchanged_files(
 
     await check_and_ship(cfg, dedup)
 
-    # Only 2 files should be shipped (the third was already seen).
-    assert ship_mock.call_count == 2
+    # All 3 files ship — server-side 409 handles dedup, not the agent.
+    assert ship_mock.call_count == 3
     shipped_names = {call.kwargs["original_filename"] for call in ship_mock.call_args_list}
-    assert "client_10E.xml" not in shipped_names
+    assert "client_10E.xml" in shipped_names
