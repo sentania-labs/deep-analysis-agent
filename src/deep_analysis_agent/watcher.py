@@ -45,9 +45,7 @@ class _Handler(FileSystemEventHandler):
         path = Path(path_str)
         if path.suffix.lower() not in self._suffixes:
             return
-        if self._name_globs and not any(
-            fnmatch.fnmatch(path.name, g) for g in self._name_globs
-        ):
+        if self._name_globs and not any(fnmatch.fnmatch(path.name, g) for g in self._name_globs):
             return
         self._enqueue(path)
 
@@ -134,9 +132,7 @@ class LogWatcher:
                 continue
             if p.suffix.lower() not in self._suffixes:
                 continue
-            if self._name_globs and not any(
-                fnmatch.fnmatch(p.name, g) for g in self._name_globs
-            ):
+            if self._name_globs and not any(fnmatch.fnmatch(p.name, g) for g in self._name_globs):
                 continue
             if known is not None:
                 entry = known.get(str(p))
