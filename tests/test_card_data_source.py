@@ -151,6 +151,30 @@ def test_find_card_data_source_dir_nonexistent(tmp_path: Path) -> None:
     assert result is None
 
 
+def test_find_card_data_source_dir_picks_newest_mtime(tmp_path: Path) -> None:
+    """When multiple CardDataSource dirs exist, pick the one with the newest mtime."""
+    import os
+    import time
+
+    old_cds = tmp_path / "h1" / "h2" / "mtgo..tion_old" / "Data" / "CardDataSource"
+    old_cds.mkdir(parents=True)
+    (old_cds / "client_MH3.xml").write_text("<old/>")
+    # Set an older mtime on the old directory.
+    old_time = time.time() - 3600
+    os.utime(old_cds, (old_time, old_time))
+
+    new_cds = tmp_path / "h1" / "h2" / "mtgo..tion_new" / "Data" / "CardDataSource"
+    new_cds.mkdir(parents=True)
+    (new_cds / "client_MH3.xml").write_text("<new/>")
+    # Set a newer mtime on the new directory.
+    new_time = time.time()
+    os.utime(new_cds, (new_time, new_time))
+
+    result = find_card_data_source_dir(tmp_path)
+    assert result is not None
+    assert result == new_cds
+
+
 # --- Meta key-value store (dedup) ---
 
 

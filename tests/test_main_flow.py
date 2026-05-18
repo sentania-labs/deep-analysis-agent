@@ -479,3 +479,153 @@ async def test_resync_sets_tray_uploading(tmp_path: Path, monkeypatch: pytest.Mo
     )
     assert "uploading" in tray.states
     assert watcher_started
+
+
+# --- Mtime-aware decklist dedup ---
+
+
+async def test_decklist_same_hash_different_mtime_reshipped(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A decklist file with the same hash but different mtime should be re-shipped."""
+    import os
+
+    cfg = AppConfig()
+    cfg.server.url = "https://example.test"
+    cfg.agent.api_token = "tok"
+    dedup = DedupStore(tmp_path / "dedup.db")
+    tray = _StubTray()
+    sample = tmp_path / "grouping 12345.xml"
+    sample.write_bytes(b"<grouping>deck v1</grouping>")
+
+    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, file_id="f1"))
+    monkeypatch.setattr(shipper, "ship_file", ship_mock)
+
+    log = structlog.get_logger("test")
+
+    # First ship — registers the file in dedup.
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), log)  # type: ignore[arg-type]
+    assert ship_mock.call_count == 1
+    ship_mock.reset_mock()
+
+    # Simulate round-trip edit: user changes deck, plays, reverts to same content.
+    # Content (and thus hash) is identical, but mtime changed.
+    os.utime(sample, (sample.stat().st_atime, sample.stat().st_mtime + 60))
+
+    # The is_path_unchanged check should see the mtime difference.
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), log)  # type: ignore[arg-type]
+    assert ship_mock.call_count == 1, "decklist with changed mtime should be re-shipped"
+
+    # Verify file_mtime was passed.
+    call_kwargs = ship_mock.call_args.kwargs
+    assert call_kwargs.get("file_mtime") is not None
+
+
+async def test_match_log_same_hash_still_skipped(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A match-log file with the same hash should still be skipped (hash-only dedup)."""
+    import os
+
+    cfg = AppConfig()
+    cfg.server.url = "https://example.test"
+    cfg.agent.api_token = "tok"
+    dedup = DedupStore(tmp_path / "dedup.db")
+    tray = _StubTray()
+    sample = tmp_path / "Match_GameLog_99999.dat"
+    sample.write_bytes(b"match log payload")
+
+    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, file_id="f1"))
+    monkeypatch.setattr(shipper, "ship_file", ship_mock)
+
+    log = structlog.get_logger("test")
+
+    # First ship.
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), log)  # type: ignore[arg-type]
+    assert ship_mock.call_count == 1
+    ship_mock.reset_mock()
+
+    # Touch the file to change mtime, but keep same content.
+    os.utime(sample, (sample.stat().st_atime, sample.stat().st_mtime + 60))
+
+    # Match log should still be skipped because hash is the same.
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), log)  # type: ignore[arg-type]
+    assert ship_mock.call_count == 0, "match-log with same hash should be skipped"
+
+
+async def test_decklist_same_hash_same_mtime_skipped(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A decklist with same hash AND same mtime should be skipped (no change)."""
+    cfg = AppConfig()
+    cfg.server.url = "https://example.test"
+    cfg.agent.api_token = "tok"
+    dedup = DedupStore(tmp_path / "dedup.db")
+    tray = _StubTray()
+    sample = tmp_path / "grouping 77777.xml"
+    sample.write_bytes(b"<grouping>stable deck</grouping>")
+
+    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, file_id="f1"))
+    monkeypatch.setattr(shipper, "ship_file", ship_mock)
+
+    log = structlog.get_logger("test")
+
+    # First ship.
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), log)  # type: ignore[arg-type]
+    assert ship_mock.call_count == 1
+    ship_mock.reset_mock()
+
+    # Same file, no mtime change — should be skipped.
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), log)  # type: ignore[arg-type]
+    assert ship_mock.call_count == 0, "unchanged decklist should be skipped"
+
+
+async def test_decklist_ship_includes_file_mtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When shipping a decklist, file_mtime is passed to ship_file."""
+    cfg = AppConfig()
+    cfg.server.url = "https://example.test"
+    cfg.agent.api_token = "tok"
+    dedup = DedupStore(tmp_path / "dedup.db")
+    tray = _StubTray()
+    sample = tmp_path / "grouping 55555.xml"
+    sample.write_bytes(b"<grouping>deck data</grouping>")
+
+    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, file_id="f1"))
+    monkeypatch.setattr(shipper, "ship_file", ship_mock)
+
+    log = structlog.get_logger("test")
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), log)  # type: ignore[arg-type]
+
+    ship_mock.assert_called_once()
+    call_kwargs = ship_mock.call_args.kwargs
+    assert call_kwargs["file_mtime"] == pytest.approx(sample.stat().st_mtime, abs=1.0)
+
+
+async def test_match_log_proper_name_no_file_mtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Match log ships should not include file_mtime."""
+    cfg = AppConfig()
+    cfg.server.url = "https://example.test"
+    cfg.agent.api_token = "tok"
+    dedup = DedupStore(tmp_path / "dedup.db")
+    tray = _StubTray()
+    sample = tmp_path / "Match_GameLog_12345.dat"
+    sample.write_bytes(b"match log data")
+
+    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, file_id="f1"))
+    monkeypatch.setattr(shipper, "ship_file", ship_mock)
+
+    log = structlog.get_logger("test")
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), log)  # type: ignore[arg-type]
+
+    ship_mock.assert_called_once()
+    call_kwargs = ship_mock.call_args.kwargs
+    assert call_kwargs.get("file_mtime") is None

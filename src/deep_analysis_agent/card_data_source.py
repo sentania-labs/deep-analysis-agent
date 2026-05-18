@@ -44,16 +44,22 @@ def find_card_data_source_dir(log_dir: Path) -> Path | None:
         return None
     # rglob can be expensive under Apps/2.0, but CardDataSource is only
     # a few levels deep.  Limit depth by iterating manually.
+    candidates: list[Path] = []
     try:
         for candidate in log_dir.rglob("CardDataSource"):
             if candidate.is_dir():
                 # Sanity-check: should contain at least one .xml file.
                 xml_files = list(candidate.glob("*.xml"))
                 if xml_files:
-                    return candidate
+                    candidates.append(candidate)
     except OSError:
         pass
-    return None
+    if not candidates:
+        return None
+    # MTGO ClickOnce installs can leave multiple versioned directories.
+    # Pick the one with the most recent mtime (latest MTGO version).
+    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return candidates[0]
 
 
 def list_xml_files(directory: Path) -> list[Path]:

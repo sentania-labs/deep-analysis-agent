@@ -126,3 +126,42 @@ async def test_ship_default_content_type(sample_file: Path) -> None:
         mock.post("/ingest/upload").mock(side_effect=_capture)
         result = await shipper.ship_file(SERVER, "tok", sample_file, sha256="a" * 64)
     assert result.file_id == "x3"
+
+
+async def test_ship_sends_file_mtime(sample_file: Path) -> None:
+    """file_mtime form field is included when provided."""
+    import httpx
+
+    def _capture(request: object) -> Response:
+        assert isinstance(request, httpx.Request)
+        body = request.content
+        assert b"file_mtime" in body
+        return Response(200, json={"deduped": False, "file_id": "x4"})
+
+    async with respx.mock(base_url=SERVER) as mock:
+        mock.post("/ingest/upload").mock(side_effect=_capture)
+        result = await shipper.ship_file(
+            SERVER,
+            "tok",
+            sample_file,
+            sha256="a" * 64,
+            content_type="decklist",
+            file_mtime=1716000000.0,
+        )
+    assert result.file_id == "x4"
+
+
+async def test_ship_omits_file_mtime_when_none(sample_file: Path) -> None:
+    """file_mtime form field is NOT included when None (default)."""
+    import httpx
+
+    def _capture(request: object) -> Response:
+        assert isinstance(request, httpx.Request)
+        body = request.content
+        assert b"file_mtime" not in body
+        return Response(200, json={"deduped": False, "file_id": "x5"})
+
+    async with respx.mock(base_url=SERVER) as mock:
+        mock.post("/ingest/upload").mock(side_effect=_capture)
+        result = await shipper.ship_file(SERVER, "tok", sample_file, sha256="a" * 64)
+    assert result.file_id == "x5"
