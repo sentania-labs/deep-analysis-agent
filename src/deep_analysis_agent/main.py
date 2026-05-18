@@ -12,7 +12,7 @@ from pathlib import Path
 
 import structlog
 
-from . import __version__, auth, shipper
+from . import __version__, auth, card_data_source, shipper
 from .config import AppConfig, load_config, save_config
 from .dedup import DedupStore
 from .first_run import run_first_run_flow
@@ -199,12 +199,27 @@ async def _handle_file(
             log.exception("hash_failed", path=str(path))
             return
     assert sha is not None
+    ct = detect_content_type(path.name)
+
+    # Decklists are mutable — users edit decks between matches.  Hash-only
+    # dedup would miss round-trip edits (change → play → revert → same hash).
+    # For mutable files, re-ship whenever the on-disk mtime differs from the
+    # stored mtime even if the hash is already known.
     if dedup.is_seen(sha):
-        log.info("skip_seen", path=str(path), sha256=sha[:8])
-        return
+        if ct != "decklist":
+            log.info("skip_seen", path=str(path), sha256=sha[:8])
+            return
+        # Decklist: check whether mtime changed since last ship.
+        if dedup.is_path_unchanged(path):
+            log.info("skip_seen", path=str(path), sha256=sha[:8])
+            return
+        log.info("decklist_mtime_changed", path=str(path), sha256=sha[:8])
 
     assert config.agent.api_token is not None
-    ct = detect_content_type(path.name)
+    file_mtime: float | None = None
+    if ct == "decklist":
+        with contextlib.suppress(OSError):
+            file_mtime = path.stat().st_mtime
     tray.set_state("uploading")
     try:
         result = await shipper.ship_file(
@@ -215,6 +230,7 @@ async def _handle_file(
             tls_verify=config.server.tls_verify,
             content_type=ct,
             original_filename=path.name,
+            file_mtime=file_mtime,
         )
     except shipper.ShipError:
         log.exception("ship_failed", path=str(path), sha256=sha[:8])
@@ -454,6 +470,12 @@ async def _async_main() -> int:
             )
             tray.set_state("watcher_disabled")
 
+        # Ship CardDataSource reference data if changed (non-blocking).
+        cds_task = asyncio.create_task(
+            card_data_source.check_and_ship(config, dedup),
+            name="card-data-source",
+        )
+
         hb_task = asyncio.create_task(
             _heartbeat_loop(
                 config,
@@ -509,9 +531,10 @@ async def _async_main() -> int:
             await asyncio.sleep(0.2)
 
         stop_event.set()
+        cds_task.cancel()
         hb_task.cancel()
         rev_task.cancel()
-        for t in (hb_task, rev_task):
+        for t in (cds_task, hb_task, rev_task):
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await t
         return 0

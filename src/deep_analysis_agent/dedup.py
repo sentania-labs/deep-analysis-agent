@@ -39,6 +39,15 @@ class DedupStore:
         for col, col_type in [("file_size", "INTEGER"), ("file_mtime", "REAL")]:
             with contextlib.suppress(sqlite3.OperationalError):
                 self._db.execute(f"ALTER TABLE seen_files ADD COLUMN {col} {col_type}")
+        self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
 
     def is_seen(self, sha256: str) -> bool:
         with self._lock:
@@ -97,9 +106,10 @@ class DedupStore:
         return int(row[0]) if row else 0
 
     def clear(self) -> None:
-        """Delete all entries from the seen-files table (nuclear resync)."""
+        """Delete all entries from seen-files and meta tables (nuclear resync)."""
         with self._lock:
             self._db.execute("DELETE FROM seen_files")
+            self._db.execute("DELETE FROM meta")
 
     def known_hashes(self) -> set[str]:
         """Return all tracked SHA-256 hashes."""
@@ -113,6 +123,27 @@ class DedupStore:
             for chunk in iter(lambda: fh.read(_CHUNK), b""):
                 h.update(chunk)
         return h.hexdigest()
+
+    def get_meta(self, key: str) -> str | None:
+        """Retrieve a value from the meta key-value table."""
+        with self._lock:
+            row = self._db.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return str(row[0]) if row else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        """Store a value in the meta key-value table."""
+        now = datetime.now(UTC).isoformat()
+        with self._lock:
+            self._db.execute(
+                """
+                INSERT INTO meta (key, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = excluded.updated_at
+                """,
+                (key, value, now),
+            )
 
     def close(self) -> None:
         with self._lock:
