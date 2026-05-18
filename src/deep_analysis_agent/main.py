@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import fnmatch
 import sys
 import threading
 from collections.abc import Callable
@@ -25,6 +26,20 @@ _STARTUP_BANNER_RULE = "=" * 60
 
 _HASH_RETRIES = 3
 _HASH_RETRY_DELAY = 2.0
+
+# Mapping of filename glob patterns to server content_type values.
+_CONTENT_TYPE_MAP: list[tuple[str, str]] = [
+    ("grouping *.xml", "decklist"),
+    ("Match_GameLog_*.dat", "match-log"),
+]
+
+
+def detect_content_type(filename: str) -> str:
+    """Return the server content_type for a file based on its name."""
+    for pattern, ct in _CONTENT_TYPE_MAP:
+        if fnmatch.fnmatch(filename, pattern):
+            return ct
+    return "unknown"
 
 
 def _parse_version(v: str) -> tuple[int, ...]:
@@ -189,6 +204,7 @@ async def _handle_file(
         return
 
     assert config.agent.api_token is not None
+    ct = detect_content_type(path.name)
     tray.set_state("uploading")
     try:
         result = await shipper.ship_file(
@@ -197,6 +213,8 @@ async def _handle_file(
             path,
             sha,
             tls_verify=config.server.tls_verify,
+            content_type=ct,
+            original_filename=path.name,
         )
     except shipper.ShipError:
         log.exception("ship_failed", path=str(path), sha256=sha[:8])
@@ -375,7 +393,7 @@ async def _async_main() -> int:
                 suffixes=frozenset(s.lower() for s in config.mtgo.watched_suffixes),
                 stability_seconds=config.mtgo.stability_seconds,
                 on_file_ready=on_file_ready,
-                name_glob=config.mtgo.watched_name_glob,
+                name_globs=config.mtgo.watched_name_globs,
                 dedup=dedup,
             )
 

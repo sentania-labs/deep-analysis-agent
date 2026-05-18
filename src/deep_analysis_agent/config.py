@@ -20,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 from pydantic_settings.sources import TomlConfigSettingsSource
 
@@ -46,9 +46,21 @@ def _default_mtgo_log_dir() -> Path:
 
 class MTGOSettings(BaseModel):
     log_dir: Path = Field(default_factory=_default_mtgo_log_dir)
-    watched_suffixes: list[str] = Field(default_factory=lambda: [".dat", ".log"])
-    watched_name_glob: str | None = "Match_GameLog_*.dat"
+    watched_suffixes: list[str] = Field(default_factory=lambda: [".dat", ".log", ".xml"])
+    watched_name_globs: list[str] = Field(
+        default_factory=lambda: ["Match_GameLog_*.dat", "grouping *.xml"]
+    )
+    watched_name_glob: str | None = Field(default=None, exclude=True)
     stability_seconds: float = 5.0
+
+    @model_validator(mode="after")
+    def _migrate_legacy_glob(self) -> MTGOSettings:
+        """Migrate legacy single-glob config to the new list field."""
+        if self.watched_name_glob is not None:
+            if self.watched_name_glob not in self.watched_name_globs:
+                self.watched_name_globs.insert(0, self.watched_name_glob)
+            self.watched_name_glob = None
+        return self
 
 
 class ServerSettings(BaseModel):
