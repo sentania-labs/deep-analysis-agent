@@ -12,7 +12,7 @@ from pathlib import Path
 
 import structlog
 
-from . import __version__, auth, shipper
+from . import __version__, auth, card_data_source, shipper
 from .config import AppConfig, load_config, save_config
 from .dedup import DedupStore
 from .first_run import run_first_run_flow
@@ -454,6 +454,12 @@ async def _async_main() -> int:
             )
             tray.set_state("watcher_disabled")
 
+        # Ship CardDataSource reference data if changed (non-blocking).
+        cds_task = asyncio.create_task(
+            card_data_source.check_and_ship(config, dedup),
+            name="card-data-source",
+        )
+
         hb_task = asyncio.create_task(
             _heartbeat_loop(
                 config,
@@ -509,9 +515,10 @@ async def _async_main() -> int:
             await asyncio.sleep(0.2)
 
         stop_event.set()
+        cds_task.cancel()
         hb_task.cancel()
         rev_task.cancel()
-        for t in (hb_task, rev_task):
+        for t in (cds_task, hb_task, rev_task):
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await t
         return 0
