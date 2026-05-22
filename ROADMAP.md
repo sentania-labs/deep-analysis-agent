@@ -46,6 +46,19 @@ Current pain: every startup re-enqueues all matching files, and each one individ
   - No regression: files must never be silently lost
 - **Status:** Done (v0.4.10)
 
+### 4. Stability gate + finalized-match detection
+
+The agent currently ships intermediate snapshots of in-progress matches because the file-stability gate is too short — a match log that's mid-game can look "stable" between turns and get uploaded as if complete. Raise the stability gate to align with MTGO's match timeout, and once the file goes stable, scan the tail for a clear winner/loser signal to decide whether the match is finalized or inconclusive.
+
+- **Acceptance criteria:**
+  - `stability_seconds` default raised to 600s (aligns with MTGO match timeout)
+  - When a file becomes stable for 600s, agent scans the file tail for a clear winner/loser signal before shipping
+  - Clear winner/loser found → ship as a complete match (current happy path)
+  - No clear winner/loser → ship anyway, flagged as inconclusive, so the server can route it to an admin-review holding pen (server-side holding pen is a separate outcome, not implemented here)
+  - `stability_seconds` remains configurable (someone may want a shorter gate for testing)
+- **Status:** Not started
+- **Dependencies:** None on the agent side. Server-side holding-pen feature (`sentania-labs/deep-analysis-server` issue #71) is a parallel/follow-up outcome, not blocking.
+
 ---
 
 ## Cleanup
