@@ -27,7 +27,11 @@ logger = logging.getLogger(__name__)
 FileReadyCallback = Callable[[Path], None]
 
 _POLL_INTERVAL = 0.2  # seconds between stability polls
-_MAX_STABILITY_WAIT = 120.0  # give up after this much continuous churn
+# Give up after this much continuous churn. Sized to accommodate a 600s
+# stability gate on top of a multi-hour MTGO match: match length + gate
+# + slack. If MTGO/some other process holds the file open writing
+# forever, we abandon the wait rather than blocking the queue.
+_MAX_STABILITY_WAIT = 6 * 60 * 60.0
 
 
 class _Handler(FileSystemEventHandler):

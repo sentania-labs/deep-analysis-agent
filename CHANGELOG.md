@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### What's new
+- **Stability gate + finalized detection** — `mtgo.stability_seconds` default raised to 600s to align with MTGO's match timeout, eliminating intermediate snapshots of in-progress matches. Once a match log goes stable, the agent tail-scans for `wins the match` / `has conceded from the match`; if no signal is found, the file ships anyway tagged `agent_classification=inconclusive` so the server's holding pen can decide what to do with it.
+- **Autostart on Windows login** — agent registers itself under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` on first launch so it starts with Windows. A "Start with Windows" toggle in the tray menu lets users opt out; the choice persists across launches. Squirrel uninstall removes the Run-key entry (best-effort, dormant until the EXE is packed Squirrel-aware).
+
 ## v0.4.10
 
 ### What's new

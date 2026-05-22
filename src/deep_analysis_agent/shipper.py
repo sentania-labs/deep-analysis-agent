@@ -44,6 +44,7 @@ async def ship_file(
     content_type: str = "match-log",
     original_filename: str | None = None,
     file_mtime: float | None = None,
+    agent_classification: str | None = None,
 ) -> UploadResult:
     """Upload a single file to POST /ingest/upload.
 
@@ -53,6 +54,8 @@ async def ship_file(
       - content_type: "match-log", "decklist", or "unknown"
       - original_filename: the original name of the file on disk (optional)
       - file_mtime: the file's last-modified time as a Unix timestamp (optional)
+      - agent_classification: agent-side hint, "complete" or "inconclusive"
+        (optional — server parse is authoritative)
 
     Authorization: Bearer <api_token>.
     """
@@ -69,6 +72,8 @@ async def ship_file(
                     data["original_filename"] = original_filename
                 if file_mtime is not None:
                     data["file_mtime"] = str(file_mtime)
+                if agent_classification is not None:
+                    data["agent_classification"] = agent_classification
                 async with httpx.AsyncClient(timeout=_timeout(), verify=tls_verify) as client:
                     resp = await client.post(url, headers=headers, files=files, data=data)
         except httpx.HTTPError as exc:

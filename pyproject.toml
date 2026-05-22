@@ -54,7 +54,7 @@ warn_return_any = true
 warn_unused_configs = true
 
 [[tool.mypy.overrides]]
-module = ["pystray", "win32event", "win32api", "winerror", "win32crypt"]
+module = ["pystray", "win32event", "win32api", "winerror", "win32crypt", "winreg"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

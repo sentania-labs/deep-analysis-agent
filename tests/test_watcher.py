@@ -176,6 +176,35 @@ def test_multiple_globs_reject_non_matching(tmp_path: Path) -> None:
         watcher.stop()
 
 
+def test_watcher_respects_long_stability_gate(tmp_path: Path) -> None:
+    """The watcher must not fire before `stability_seconds` elapses with no churn."""
+    seen: list[Path] = []
+    event = threading.Event()
+
+    def on_ready(p: Path) -> None:
+        seen.append(p)
+        event.set()
+
+    watcher = LogWatcher(
+        watch_dir=tmp_path,
+        suffixes=frozenset({".dat"}),
+        stability_seconds=1.0,
+        on_file_ready=on_ready,
+        name_globs=["Match_GameLog_*.dat"],
+    )
+    watcher.start()
+    try:
+        target = tmp_path / "Match_GameLog_late.dat"
+        target.write_bytes(b"opening hand")
+        # Should NOT fire well before the stability gate elapses.
+        assert not event.wait(timeout=0.4), "watcher fired before stability gate elapsed"
+        # And should fire after the gate.
+        assert event.wait(timeout=3.0), "watcher never fired after stability gate"
+        assert target in seen
+    finally:
+        watcher.stop()
+
+
 def test_no_globs_matches_any_name(tmp_path: Path) -> None:
     """When name_globs is None (or empty), any file matching suffixes is accepted."""
     seen: list[Path] = []

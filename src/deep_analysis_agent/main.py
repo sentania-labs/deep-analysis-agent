@@ -12,12 +12,13 @@ from pathlib import Path
 
 import structlog
 
-from . import __version__, auth, card_data_source, shipper
+from . import __version__, auth, autostart, card_data_source, shipper
 from .config import AppConfig, load_config, save_config
 from .dedup import DedupStore
 from .first_run import run_first_run_flow
 from .instance_lock import AlreadyRunningError, InstanceLock
 from .logging import configure_logging, log_file_path
+from .match_classifier import classify_match
 from .paths import app_data_dir, config_path, dedup_path
 from .tray import TrayIcon
 from .watcher import LogWatcher
@@ -220,6 +221,19 @@ async def _handle_file(
     if ct == "decklist":
         with contextlib.suppress(OSError):
             file_mtime = path.stat().st_mtime
+
+    # Tail-scan match logs for a finalized signal. Ship in both cases —
+    # the server's holding pen handles inconclusive uploads.
+    classification: str | None = None
+    if ct == "match-log":
+        classification = classify_match(path)
+        log.info(
+            "match_classified",
+            classification=classification,
+            path=str(path),
+            sha256=sha[:8],
+        )
+
     tray.set_state("uploading")
     try:
         result = await shipper.ship_file(
@@ -231,6 +245,7 @@ async def _handle_file(
             content_type=ct,
             original_filename=path.name,
             file_mtime=file_mtime,
+            agent_classification=classification,
         )
     except shipper.ShipError:
         log.exception("ship_failed", path=str(path), sha256=sha[:8])
@@ -288,6 +303,13 @@ def _handle_squirrel_hooks() -> bool:
         _write_marker(_MARKER_JUST_UPDATED)
     elif arg == "--squirrel-install":
         _write_marker(_MARKER_FIRST_RUN)
+    elif arg == "--squirrel-uninstall":
+        # Best-effort cleanup. Squirrel only invokes hooks when the EXE
+        # is Squirrel-aware (currently packed with --allowUnaware, so this
+        # is dormant) — when the manifest is wired in a future release,
+        # this removes the Run-key entry alongside the install.
+        with contextlib.suppress(Exception):
+            autostart.disable()
 
     return True
 
@@ -370,6 +392,9 @@ async def _async_main() -> int:
             return 1
         # Reload with the saved token.
         config = load_config()
+
+    # Default-enable launch-at-login on first run; respect later opt-out.
+    autostart.ensure_default(default_enabled=True)
 
     try:
         lock = InstanceLock()
