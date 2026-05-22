@@ -59,6 +59,17 @@ The agent currently ships intermediate snapshots of in-progress matches because 
 - **Status:** Not started
 - **Dependencies:** None on the agent side. Server-side holding-pen feature (`sentania-labs/deep-analysis-server` issue #71) is a parallel/follow-up outcome, not blocking.
 
+### 5. Autostart on Windows login
+
+The agent should launch automatically when the user logs in to Windows, so file watching and uploads happen without the user having to remember to start the tray app.
+
+- **Acceptance criteria:**
+  - Agent launches automatically when user logs in to Windows (no manual start needed)
+  - User can opt out (tray menu toggle or installer option — whichever is simpler)
+  - Plays nicely with the existing PyInstaller + Squirrel install/update flow
+- **Status:** Not started
+- **Dependencies:** None
+
 ---
 
 ## Cleanup
