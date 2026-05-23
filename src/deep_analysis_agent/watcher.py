@@ -187,11 +187,17 @@ class LogWatcher:
     def _wait_stable(self, path: Path) -> bool:
         if not path.is_file():
             return False
-        deadline = time.monotonic() + _MAX_STABILITY_WAIT
         try:
             prev = path.stat()
         except OSError:
             return False
+        # Short-circuit when the file is already stable by wall-clock mtime:
+        # if it hasn't been touched in `_stability` seconds, no need to re-
+        # observe for the full window. Critical for startup-scan throughput
+        # when N already-finalized files are queued (else N × stability).
+        if time.time() - prev.st_mtime >= self._stability:
+            return True
+        deadline = time.monotonic() + _MAX_STABILITY_WAIT
         last_change = time.monotonic()
         while not self._stop.is_set():
             time.sleep(_POLL_INTERVAL)
