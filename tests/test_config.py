@@ -14,7 +14,7 @@ from deep_analysis_agent.paths import config_path
 def test_defaults_load_without_config_file(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     cfg = AppConfig()
-    assert cfg.mtgo.stability_seconds == 5.0
+    assert cfg.mtgo.stability_seconds == 600.0
     assert cfg.server.tls_verify is True
     assert cfg.logging.level == "INFO"
     assert ".dat" in cfg.mtgo.watched_suffixes

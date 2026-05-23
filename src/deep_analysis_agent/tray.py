@@ -12,6 +12,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
 
+from . import autostart
 from .about_window import AboutWindow
 from .config import AppConfig, load_config
 from .log_viewer import LogViewerWindow
@@ -160,6 +161,11 @@ class TrayIcon:
             pystray.MenuItem("Open Log", self._open_log),
             pystray.MenuItem("Settings", self._open_settings),
             pystray.MenuItem(self._pause_label, self._toggle_pause),
+            pystray.MenuItem(
+                "Start with Windows",
+                self._toggle_autostart,
+                checked=lambda _item: autostart.is_enabled(),
+            ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Check for Updates", self._check_for_updates),
             pystray.MenuItem("About", self._about),
@@ -239,6 +245,11 @@ class TrayIcon:
                 logger.exception("reload_config: on_reload callback raised")
 
         logger.info("config_reloaded")
+
+    def _toggle_autostart(self, *_: Any) -> None:
+        new_state = autostart.toggle()
+        logger.info("autostart_toggled enabled=%s", new_state)
+        self._refresh_menu()
 
     def _toggle_pause(self, *_: Any) -> None:
         self._paused = not self._paused

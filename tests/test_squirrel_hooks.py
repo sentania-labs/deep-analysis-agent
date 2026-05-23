@@ -67,6 +67,20 @@ def test_squirrel_obsolete_no_marker(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     assert not (tmp_path / _MARKER_FIRST_RUN).exists()
 
 
+def test_squirrel_uninstall_disables_autostart(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """--squirrel-uninstall calls autostart.disable() to clean up the Run key."""
+    monkeypatch.setattr(sys, "argv", ["DeepAnalysisAgent.exe", "--squirrel-uninstall"])
+    monkeypatch.setattr("deep_analysis_agent.main.app_data_dir", lambda: tmp_path)
+    called: list[bool] = []
+    monkeypatch.setattr(
+        "deep_analysis_agent.autostart.disable", lambda: called.append(True) or True
+    )
+    assert _handle_squirrel_hooks() is True
+    assert called == [True]
+
+
 def test_write_marker_creates_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr("deep_analysis_agent.main.app_data_dir", lambda: tmp_path)
     _write_marker("test_marker")

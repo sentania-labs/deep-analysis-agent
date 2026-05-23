@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from pathlib import Path
@@ -172,6 +173,67 @@ def test_multiple_globs_reject_non_matching(tmp_path: Path) -> None:
         (tmp_path / "settings.xml").write_bytes(b"<settings/>")
         time.sleep(0.6)
         assert seen == []
+    finally:
+        watcher.stop()
+
+
+def test_watcher_respects_long_stability_gate(tmp_path: Path) -> None:
+    """The watcher must not fire before `stability_seconds` elapses with no churn."""
+    seen: list[Path] = []
+    event = threading.Event()
+
+    def on_ready(p: Path) -> None:
+        seen.append(p)
+        event.set()
+
+    watcher = LogWatcher(
+        watch_dir=tmp_path,
+        suffixes=frozenset({".dat"}),
+        stability_seconds=1.0,
+        on_file_ready=on_ready,
+        name_globs=["Match_GameLog_*.dat"],
+    )
+    watcher.start()
+    try:
+        target = tmp_path / "Match_GameLog_late.dat"
+        target.write_bytes(b"opening hand")
+        # Should NOT fire well before the stability gate elapses.
+        assert not event.wait(timeout=0.4), "watcher fired before stability gate elapsed"
+        # And should fire after the gate.
+        assert event.wait(timeout=3.0), "watcher never fired after stability gate"
+        assert target in seen
+    finally:
+        watcher.stop()
+
+
+def test_wait_stable_short_circuits_for_old_mtime(tmp_path: Path) -> None:
+    """Files already finalized on disk (mtime older than stability window)
+    must not block startup-scan throughput by re-observing for the full
+    window. Pre-fix: this test would block for ~600s. Post-fix: returns
+    immediately because the file is already stable by mtime."""
+    seen: list[Path] = []
+    event = threading.Event()
+
+    def on_ready(p: Path) -> None:
+        seen.append(p)
+        event.set()
+
+    target = tmp_path / "Match_GameLog_old.dat"
+    target.write_bytes(b"already finalized")
+    old_ts = time.time() - 3600  # 1 hour ago
+    os.utime(target, (old_ts, old_ts))
+
+    watcher = LogWatcher(
+        watch_dir=tmp_path,
+        suffixes=frozenset({".dat"}),
+        stability_seconds=600.0,
+        on_file_ready=on_ready,
+        name_globs=["Match_GameLog_*.dat"],
+    )
+    watcher.start()
+    try:
+        assert event.wait(timeout=5.0), "watcher did not short-circuit for finalized file"
+        assert target in seen
     finally:
         watcher.stop()
 

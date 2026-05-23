@@ -56,7 +56,7 @@ The agent currently ships intermediate snapshots of in-progress matches because 
   - Clear winner/loser found → ship as a complete match (current happy path)
   - No clear winner/loser → ship anyway, flagged as inconclusive, so the server can route it to an admin-review holding pen (server-side holding pen is a separate outcome, not implemented here)
   - `stability_seconds` remains configurable (someone may want a shorter gate for testing)
-- **Status:** Not started
+- **Status:** Done (unreleased — bundled with autostart in v0.5.x)
 - **Dependencies:** None on the agent side. Server-side holding-pen feature (`sentania-labs/deep-analysis-server` issue #71) is a parallel/follow-up outcome, not blocking.
 
 ### 5. Autostart on Windows login
@@ -67,7 +67,7 @@ The agent should launch automatically when the user logs in to Windows, so file 
   - Agent launches automatically when user logs in to Windows (no manual start needed)
   - User can opt out (tray menu toggle or installer option — whichever is simpler)
   - Plays nicely with the existing PyInstaller + Squirrel install/update flow
-- **Status:** Not started
+- **Status:** Done (unreleased — bundled with stability gate in v0.5.x)
 - **Dependencies:** None
 
 ---

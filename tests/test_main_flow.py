@@ -607,6 +607,78 @@ async def test_decklist_ship_includes_file_mtime(
     assert call_kwargs["file_mtime"] == pytest.approx(sample.stat().st_mtime, abs=1.0)
 
 
+async def test_match_log_inconclusive_still_ships(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A match log without a finalized signal still ships, tagged inconclusive."""
+    cfg = AppConfig()
+    cfg.server.url = "https://example.test"
+    cfg.agent.api_token = "tok"
+    dedup = DedupStore(tmp_path / "dedup.db")
+    tray = _StubTray()
+    sample = tmp_path / "Match_GameLog_inflight.dat"
+    sample.write_bytes(b"opening hands\nturn 1\nturn 2\n")
+
+    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, file_id="i1"))
+    monkeypatch.setattr(shipper, "ship_file", ship_mock)
+
+    log = structlog.get_logger("test")
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), log)  # type: ignore[arg-type]
+
+    ship_mock.assert_called_once()
+    kwargs = ship_mock.call_args.kwargs
+    assert kwargs["agent_classification"] == "inconclusive"
+
+
+async def test_match_log_complete_classification_passed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A match log with a finalized signal ships as complete."""
+    cfg = AppConfig()
+    cfg.server.url = "https://example.test"
+    cfg.agent.api_token = "tok"
+    dedup = DedupStore(tmp_path / "dedup.db")
+    tray = _StubTray()
+    sample = tmp_path / "Match_GameLog_done.dat"
+    sample.write_bytes(b"...turn 12...\nAlice wins the match\n")
+
+    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, file_id="c1"))
+    monkeypatch.setattr(shipper, "ship_file", ship_mock)
+
+    log = structlog.get_logger("test")
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), log)  # type: ignore[arg-type]
+
+    ship_mock.assert_called_once()
+    kwargs = ship_mock.call_args.kwargs
+    assert kwargs["agent_classification"] == "complete"
+
+
+async def test_decklist_no_agent_classification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Decklists are not match logs and should not carry an agent_classification."""
+    cfg = AppConfig()
+    cfg.server.url = "https://example.test"
+    cfg.agent.api_token = "tok"
+    dedup = DedupStore(tmp_path / "dedup.db")
+    tray = _StubTray()
+    sample = tmp_path / "grouping 31337.xml"
+    sample.write_bytes(b"<grouping>deck</grouping>")
+
+    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, file_id="d1"))
+    monkeypatch.setattr(shipper, "ship_file", ship_mock)
+
+    log = structlog.get_logger("test")
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), log)  # type: ignore[arg-type]
+
+    ship_mock.assert_called_once()
+    kwargs = ship_mock.call_args.kwargs
+    assert kwargs["agent_classification"] is None
+
+
 async def test_match_log_proper_name_no_file_mtime(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

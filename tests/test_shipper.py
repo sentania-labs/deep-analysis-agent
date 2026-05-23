@@ -151,6 +151,44 @@ async def test_ship_sends_file_mtime(sample_file: Path) -> None:
     assert result.file_id == "x4"
 
 
+async def test_ship_sends_agent_classification(sample_file: Path) -> None:
+    """agent_classification form field is included when provided."""
+    import httpx
+
+    def _capture(request: object) -> Response:
+        assert isinstance(request, httpx.Request)
+        body = request.content
+        assert b"agent_classification" in body
+        assert b"inconclusive" in body
+        return Response(200, json={"deduped": False, "file_id": "c1"})
+
+    async with respx.mock(base_url=SERVER) as mock:
+        mock.post("/ingest/upload").mock(side_effect=_capture)
+        result = await shipper.ship_file(
+            SERVER,
+            "tok",
+            sample_file,
+            sha256="a" * 64,
+            agent_classification="inconclusive",
+        )
+    assert result.file_id == "c1"
+
+
+async def test_ship_omits_agent_classification_when_none(sample_file: Path) -> None:
+    """No agent_classification field when caller leaves it unset."""
+    import httpx
+
+    def _capture(request: object) -> Response:
+        assert isinstance(request, httpx.Request)
+        body = request.content
+        assert b"agent_classification" not in body
+        return Response(200, json={"deduped": False, "file_id": "c2"})
+
+    async with respx.mock(base_url=SERVER) as mock:
+        mock.post("/ingest/upload").mock(side_effect=_capture)
+        await shipper.ship_file(SERVER, "tok", sample_file, sha256="a" * 64)
+
+
 async def test_ship_omits_file_mtime_when_none(sample_file: Path) -> None:
     """file_mtime form field is NOT included when None (default)."""
     import httpx

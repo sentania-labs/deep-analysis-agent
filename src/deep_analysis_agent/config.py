@@ -51,7 +51,7 @@ class MTGOSettings(BaseModel):
         default_factory=lambda: ["Match_GameLog_*.dat", "grouping *.xml"]
     )
     watched_name_glob: str | None = Field(default=None, exclude=True)
-    stability_seconds: float = 5.0
+    stability_seconds: float = 600.0
     card_data_source_dir: Path | None = None
     card_data_source_enabled: bool = True
 
