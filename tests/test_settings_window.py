@@ -9,10 +9,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from deep_analysis_agent import settings_window as settings_window_mod
 from deep_analysis_agent import tray as tray_mod
 from deep_analysis_agent.config import AppConfig
 from deep_analysis_agent.settings_window import (
     SettingsWindow,
+    apply_autostart_change,
     build_config,
     normalize_server_url,
     validate_form,
@@ -208,3 +210,87 @@ def test_settings_window_save_callback_signature() -> None:
     config = AppConfig()
     win = SettingsWindow(config, on_save=lambda: None, on_close=lambda: None)
     assert win._on_save is not None
+
+
+def _patch_autostart(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    enabled: bool,
+    enable_result: bool = True,
+    disable_result: bool = True,
+) -> dict[str, int]:
+    """Patch the autostart facade used by settings_window. Returns a call counter."""
+    calls = {"enable": 0, "disable": 0, "is_enabled": 0}
+
+    def _is_enabled() -> bool:
+        calls["is_enabled"] += 1
+        return enabled
+
+    def _enable() -> bool:
+        calls["enable"] += 1
+        return enable_result
+
+    def _disable() -> bool:
+        calls["disable"] += 1
+        return disable_result
+
+    monkeypatch.setattr(settings_window_mod.autostart, "is_enabled", _is_enabled)
+    monkeypatch.setattr(settings_window_mod.autostart, "enable", _enable)
+    monkeypatch.setattr(settings_window_mod.autostart, "disable", _disable)
+    return calls
+
+
+def test_apply_autostart_change_noop_when_already_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the registry already reflects the desired state, no enable/disable call."""
+    calls = _patch_autostart(monkeypatch, enabled=True)
+    assert apply_autostart_change(desired=True) is None
+    assert calls["enable"] == 0
+    assert calls["disable"] == 0
+
+
+def test_apply_autostart_change_noop_when_already_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _patch_autostart(monkeypatch, enabled=False)
+    assert apply_autostart_change(desired=False) is None
+    assert calls["enable"] == 0
+    assert calls["disable"] == 0
+
+
+def test_apply_autostart_change_enables_when_flipped_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _patch_autostart(monkeypatch, enabled=False)
+    assert apply_autostart_change(desired=True) is None
+    assert calls["enable"] == 1
+    assert calls["disable"] == 0
+
+
+def test_apply_autostart_change_disables_when_flipped_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _patch_autostart(monkeypatch, enabled=True)
+    assert apply_autostart_change(desired=False) is None
+    assert calls["enable"] == 0
+    assert calls["disable"] == 1
+
+
+def test_apply_autostart_change_returns_message_on_enable_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When enable() returns False, the helper surfaces a user-facing warning string."""
+    _patch_autostart(monkeypatch, enabled=False, enable_result=False)
+    err = apply_autostart_change(desired=True)
+    assert err is not None
+    assert "enable" in err.lower()
+
+
+def test_apply_autostart_change_returns_message_on_disable_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_autostart(monkeypatch, enabled=True, disable_result=False)
+    err = apply_autostart_change(desired=False)
+    assert err is not None
+    assert "disable" in err.lower()
