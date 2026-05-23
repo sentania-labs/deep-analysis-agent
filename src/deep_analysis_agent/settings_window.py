@@ -18,6 +18,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from . import autostart
 from .config import (
     AgentSettings,
     AppConfig,
@@ -93,6 +94,24 @@ def build_config(
     )
 
 
+def apply_autostart_change(desired: bool) -> str | None:
+    """Sync the registry-backed autostart state to ``desired``.
+
+    Returns ``None`` on success or no-op, or a user-facing error message
+    if the underlying ``autostart`` call reported failure.
+    """
+    current = autostart.is_enabled()
+    if desired == current:
+        return None
+    if desired:
+        if autostart.enable():
+            return None
+        return "Could not enable Start with Windows. Check the agent log for details."
+    if autostart.disable():
+        return None
+    return "Could not disable Start with Windows. Check the agent log for details."
+
+
 def _open_in_editor(path: Path) -> None:
     if not path.exists():
         logger.warning("settings open-raw target missing: %s", path)
@@ -162,6 +181,7 @@ class SettingsWindow:
         tls_var = tk.BooleanVar(value=tls_default)
         machine_var = tk.StringVar(value=cfg.agent.machine_name)
         heartbeat_var = tk.IntVar(value=max(1, int(cfg.agent.heartbeat_interval_seconds)))
+        autostart_var = tk.BooleanVar(value=autostart.is_enabled())
         agent_id_text = cfg.agent.agent_id or "(not registered)"
         log_dir_var = tk.StringVar(value=str(cfg.mtgo.log_dir))
         log_level_var = tk.StringVar(value=cfg.logging.level.upper())
@@ -208,6 +228,10 @@ class SettingsWindow:
         row += 1
         ttk.Label(frame, text="Agent ID:").grid(row=row, column=0, sticky="w", padx=(0, 8))
         ttk.Label(frame, text=agent_id_text, foreground="#666").grid(
+            row=row, column=1, columnspan=2, sticky="w", pady=2
+        )
+        row += 1
+        ttk.Checkbutton(frame, text="Start with Windows on login", variable=autostart_var).grid(
             row=row, column=1, columnspan=2, sticky="w", pady=2
         )
         row += 1
@@ -309,6 +333,9 @@ class SettingsWindow:
                     parent=root,
                 )
                 return
+            autostart_err = apply_autostart_change(bool(autostart_var.get()))
+            if autostart_err is not None:
+                messagebox.showwarning("Autostart", autostart_err, parent=root)
             try:
                 self._on_save()
             except Exception:
@@ -357,6 +384,7 @@ def detect_default_mtgo_log_dir() -> Path:
 
 __all__ = [
     "SettingsWindow",
+    "apply_autostart_change",
     "build_config",
     "detect_default_mtgo_log_dir",
     "normalize_server_url",
