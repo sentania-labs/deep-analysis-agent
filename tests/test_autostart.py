@@ -157,6 +157,32 @@ def test_ensure_default_disabled_path(
     assert (tmp_path / autostart._INIT_MARKER).exists()
 
 
+def test_ensure_default_skips_marker_on_enable_failure(
+    fake_registry: _FakeWinreg,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If enable() fails (e.g. transient registry error), the init marker
+    must not be written so the next launch retries — rather than
+    permanently locking in the failure with autostart never registered."""
+    monkeypatch.setattr(autostart, "app_data_dir", lambda: tmp_path)
+
+    enable_calls = {"n": 0}
+
+    def _fail_enable() -> bool:
+        enable_calls["n"] += 1
+        return False
+
+    monkeypatch.setattr(autostart, "enable", _fail_enable)
+    autostart.ensure_default(default_enabled=True)
+    assert not (tmp_path / autostart._INIT_MARKER).exists()
+    assert enable_calls["n"] == 1
+    # Next launch must retry enable() (marker absent).
+    autostart.ensure_default(default_enabled=True)
+    assert enable_calls["n"] == 2
+    assert not (tmp_path / autostart._INIT_MARKER).exists()
+
+
 def test_noop_off_windows(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """On non-Windows, all functions short-circuit cleanly."""
     monkeypatch.setattr(autostart, "_is_windows", lambda: False)

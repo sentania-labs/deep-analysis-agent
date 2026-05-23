@@ -117,8 +117,11 @@ def ensure_default(default_enabled: bool = True) -> None:
     except OSError:
         logger.exception("autostart_marker_dir_failed")
         return
-    if default_enabled:
-        enable()
+    if default_enabled and not enable():
+        # Leave the marker absent so the next launch retries enable()
+        # rather than permanently locking in a transient registry error.
+        logger.warning("autostart_enable_failed_will_retry_next_launch")
+        return
     try:
         marker.write_text("1", encoding="utf-8")
     except OSError:
