@@ -491,9 +491,10 @@ def _schedule_tray_notification(
         import time
 
         time.sleep(delay)
-        if tray._icon is not None:
+        icon = tray._icon
+        if icon is not None:
             with contextlib.suppress(Exception):
-                tray._icon.notify(message, title)
+                icon.notify(message, title)
 
     threading.Thread(target=_notify, name="startup-notify", daemon=True).start()
 
@@ -553,7 +554,7 @@ async def _async_main() -> int:
                 loop,
             )
             try:
-                fut.result(timeout=600)
+                fut.result(timeout=300)
             except Exception:
                 log.exception("handle_file_raised", path=str(path))
 
