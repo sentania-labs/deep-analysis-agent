@@ -554,7 +554,7 @@ async def _async_main() -> int:
                 loop,
             )
             try:
-                fut.result(timeout=180)
+                fut.result(timeout=300)
             except Exception:
                 log.exception("handle_file_raised", path=str(path))
 
