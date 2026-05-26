@@ -6,6 +6,10 @@ exercised by test_main_flow.py or test_version_detection.py.
 
 from __future__ import annotations
 
+import sys
+
+import pytest
+
 from deep_analysis_agent.main import _parse_version, detect_content_type
 
 # --- detect_content_type ---
@@ -38,13 +42,14 @@ class TestDetectContentType:
         assert detect_content_type("grouping 1.xml") == "decklist"
         assert detect_content_type("grouping 999999999.xml") == "decklist"
 
-    def test_match_log_case_sensitive(self) -> None:
-        """fnmatch is case-sensitive on non-Windows; match pattern is exact case."""
-        # The glob "Match_GameLog_*.dat" should not match lowercase.
+    @pytest.mark.skipif(sys.platform == "win32", reason="fnmatch is case-insensitive on Windows")
+    def test_match_log_case_sensitive_posix(self) -> None:
+        """fnmatch is case-sensitive on POSIX; match pattern is exact case."""
         result = detect_content_type("match_gamelog_12345.dat")
         assert result == "unknown"
 
-    def test_grouping_case_sensitive(self) -> None:
+    @pytest.mark.skipif(sys.platform == "win32", reason="fnmatch is case-insensitive on Windows")
+    def test_grouping_case_sensitive_posix(self) -> None:
         result = detect_content_type("Grouping 12345.xml")
         assert result == "unknown"
 
