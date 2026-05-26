@@ -20,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 from pydantic_settings.sources import TomlConfigSettingsSource
 
@@ -54,6 +54,24 @@ class MTGOSettings(BaseModel):
     stability_seconds: float = 600.0
     card_data_source_dir: Path | None = None
     card_data_source_enabled: bool = True
+
+    @field_validator("stability_seconds", mode="after")
+    @classmethod
+    def _enforce_stability_floor(cls, v: float) -> float:
+        """Clamp stability_seconds to a minimum of 600s.
+
+        Legacy config files may have the old default of 5.0 which would
+        bypass the stability gate entirely.
+        """
+        floor = 600.0
+        if v < floor:
+            logger.warning(
+                "stability_seconds=%s is below the minimum floor; clamping to %s",
+                v,
+                floor,
+            )
+            return floor
+        return v
 
     @model_validator(mode="after")
     def _migrate_legacy_glob(self) -> MTGOSettings:

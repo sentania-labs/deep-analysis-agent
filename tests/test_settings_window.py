@@ -94,7 +94,7 @@ def test_build_config_carries_forward_secrets_and_unedited_fields() -> None:
     original.agent.api_token = "tok-keep"
     original.agent.registered_at = datetime(2026, 1, 1, 12, 0, 0)
     original.mtgo.watched_suffixes = [".dat", ".log", ".csv"]
-    original.mtgo.stability_seconds = 9.0
+    original.mtgo.stability_seconds = 750.0
     original.logging.log_dir = Path("/var/log/da-custom")
 
     new = build_config(
@@ -113,7 +113,7 @@ def test_build_config_carries_forward_secrets_and_unedited_fields() -> None:
     assert new.agent.api_token == "tok-keep"
     assert new.agent.registered_at == datetime(2026, 1, 1, 12, 0, 0)
     assert new.mtgo.watched_suffixes == [".dat", ".log", ".csv"]
-    assert new.mtgo.stability_seconds == 9.0
+    assert new.mtgo.stability_seconds == 750.0
     assert new.logging.log_dir == Path("/var/log/da-custom")
 
 

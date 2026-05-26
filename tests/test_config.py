@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from deep_analysis_agent import config as config_module
-from deep_analysis_agent.config import AppConfig, load_config
+from deep_analysis_agent.config import AppConfig, MTGOSettings, load_config
 from deep_analysis_agent.paths import config_path
 
 
@@ -159,3 +159,19 @@ def test_config_migration_case_insensitive(tmp_path: Path, monkeypatch: pytest.M
 
     cfg = load_config()
     assert "default" not in str(cfg.mtgo.log_dir).lower()
+
+
+class TestStabilitySecondsFloor:
+    """stability_seconds is clamped to a minimum of 600."""
+
+    def test_below_floor_clamped_to_600(self) -> None:
+        m = MTGOSettings(stability_seconds=5.0)
+        assert m.stability_seconds == 600.0
+
+    def test_at_floor_unchanged(self) -> None:
+        m = MTGOSettings(stability_seconds=600.0)
+        assert m.stability_seconds == 600.0
+
+    def test_above_floor_unchanged(self) -> None:
+        m = MTGOSettings(stability_seconds=900.0)
+        assert m.stability_seconds == 900.0
