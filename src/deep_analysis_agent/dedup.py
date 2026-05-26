@@ -10,10 +10,13 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import logging
 import sqlite3
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
+
+_log = logging.getLogger(__name__)
 
 _CHUNK = 1024 * 1024
 
@@ -23,6 +26,7 @@ class DedupStore:
         self._path = db_path
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
+        self._closed = False
         self._db = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
         self._db.execute(
             """
@@ -50,6 +54,9 @@ class DedupStore:
         )
 
     def is_seen(self, sha256: str) -> bool:
+        if self._closed:
+            _log.debug("is_seen called after close — returning False")
+            return False
         with self._lock:
             row = self._db.execute(
                 "SELECT 1 FROM seen_files WHERE sha256 = ?", (sha256,)
@@ -57,6 +64,9 @@ class DedupStore:
         return row is not None
 
     def is_path_unchanged(self, path: Path) -> bool:
+        if self._closed:
+            _log.debug("is_path_unchanged called after close — returning False")
+            return False
         try:
             st = path.stat()
         except OSError:
@@ -71,6 +81,9 @@ class DedupStore:
         return bool(row[0] == st.st_size and row[1] == st.st_mtime)
 
     def mark_seen(self, sha256: str, path: Path) -> None:
+        if self._closed:
+            _log.debug("mark_seen called after close — skipping")
+            return
         now = datetime.now(UTC).isoformat()
         try:
             st = path.stat()
@@ -93,6 +106,9 @@ class DedupStore:
 
     def known_paths(self) -> dict[str, tuple[int | None, float | None]]:
         """Return all tracked paths as {path_str: (size, mtime)}."""
+        if self._closed:
+            _log.debug("known_paths called after close — returning empty")
+            return {}
         with self._lock:
             rows = self._db.execute(
                 "SELECT original_path, file_size, file_mtime FROM seen_files"
@@ -101,23 +117,35 @@ class DedupStore:
 
     def count(self) -> int:
         """Return the number of entries in the seen-files table."""
+        if self._closed:
+            _log.debug("count called after close — returning 0")
+            return 0
         with self._lock:
             row = self._db.execute("SELECT COUNT(*) FROM seen_files").fetchone()
         return int(row[0]) if row else 0
 
     def clear(self) -> None:
         """Delete all entries from seen-files and meta tables (nuclear resync)."""
+        if self._closed:
+            _log.debug("clear called after close — skipping")
+            return
         with self._lock:
             self._db.execute("DELETE FROM seen_files")
             self._db.execute("DELETE FROM meta")
 
     def clear_seen(self) -> None:
         """Delete seen-files rows only, preserving the meta table."""
+        if self._closed:
+            _log.debug("clear_seen called after close — skipping")
+            return
         with self._lock:
             self._db.execute("DELETE FROM seen_files")
 
     def known_hashes(self) -> set[str]:
         """Return all tracked SHA-256 hashes."""
+        if self._closed:
+            _log.debug("known_hashes called after close — returning empty")
+            return set()
         with self._lock:
             rows = self._db.execute("SELECT sha256 FROM seen_files").fetchall()
         return {row[0] for row in rows}
@@ -131,12 +159,18 @@ class DedupStore:
 
     def get_meta(self, key: str) -> str | None:
         """Retrieve a value from the meta key-value table."""
+        if self._closed:
+            _log.debug("get_meta called after close — returning None")
+            return None
         with self._lock:
             row = self._db.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
         return str(row[0]) if row else None
 
     def set_meta(self, key: str, value: str) -> None:
         """Store a value in the meta key-value table."""
+        if self._closed:
+            _log.debug("set_meta called after close — skipping")
+            return
         now = datetime.now(UTC).isoformat()
         with self._lock:
             self._db.execute(
@@ -151,5 +185,6 @@ class DedupStore:
             )
 
     def close(self) -> None:
+        self._closed = True
         with self._lock:
             self._db.close()
