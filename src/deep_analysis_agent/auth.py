@@ -43,6 +43,7 @@ class HeartbeatResult:
     revoked: bool
     upload_count: int
     min_agent_version: str | None
+    reingest_requested_at: datetime | None
 
 
 def _timeout() -> httpx.Timeout:
@@ -147,17 +148,20 @@ async def heartbeat(
         raise HeartbeatError(f"server returned {resp.status_code}: {resp.text[:200]}")
 
     data = resp.json()
-    reg_at_raw = data.get("registered_at")
-    reg_at = None
-    if reg_at_raw:
+
+    def _parse_dt(raw: str | None) -> datetime | None:
+        if not raw:
+            return None
         try:
-            reg_at = datetime.fromisoformat(reg_at_raw.replace("Z", "+00:00"))
+            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
         except ValueError:
-            reg_at = None
+            return None
+
     return HeartbeatResult(
         status=str(data.get("status", "")),
-        registered_at=reg_at,
+        registered_at=_parse_dt(data.get("registered_at")),
         revoked=bool(data.get("revoked", False)),
         upload_count=int(data.get("upload_count", 0)),
         min_agent_version=data.get("min_agent_version"),
+        reingest_requested_at=_parse_dt(data.get("reingest_requested_at")),
     )
