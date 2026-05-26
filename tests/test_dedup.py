@@ -71,6 +71,59 @@ def test_clear_empties_table(tmp_path: Path) -> None:
     assert store.is_seen(sha2) is False
 
 
+def test_clear_seen_preserves_meta(tmp_path: Path) -> None:
+    """clear_seen() removes seen_files but keeps meta table entries."""
+    db = tmp_path / "dedup.db"
+    f1 = tmp_path / "a.dat"
+    f2 = tmp_path / "b.dat"
+    sha1 = _write(f1, b"alpha")
+    sha2 = _write(f2, b"bravo")
+
+    store = DedupStore(db)
+    store.mark_seen(sha1, f1)
+    store.mark_seen(sha2, f2)
+    store.set_meta("last_reingest_at", "2026-05-26T12:00:00+00:00")
+    assert store.count() == 2
+    assert store.get_meta("last_reingest_at") == "2026-05-26T12:00:00+00:00"
+
+    store.clear_seen()
+    assert store.count() == 0
+    assert store.is_seen(sha1) is False
+    assert store.is_seen(sha2) is False
+    # Meta should be untouched.
+    assert store.get_meta("last_reingest_at") == "2026-05-26T12:00:00+00:00"
+
+
+def test_clear_wipes_both_tables(tmp_path: Path) -> None:
+    """clear() removes both seen_files and meta entries."""
+    db = tmp_path / "dedup.db"
+    f1 = tmp_path / "a.dat"
+    sha1 = _write(f1, b"alpha")
+
+    store = DedupStore(db)
+    store.mark_seen(sha1, f1)
+    store.set_meta("some_key", "some_value")
+    assert store.count() == 1
+    assert store.get_meta("some_key") == "some_value"
+
+    store.clear()
+    assert store.count() == 0
+    assert store.get_meta("some_key") is None
+
+
+def test_get_meta_returns_none_for_missing_key(tmp_path: Path) -> None:
+    store = DedupStore(tmp_path / "dedup.db")
+    assert store.get_meta("nonexistent") is None
+
+
+def test_set_meta_overwrites_existing(tmp_path: Path) -> None:
+    store = DedupStore(tmp_path / "dedup.db")
+    store.set_meta("key", "value1")
+    assert store.get_meta("key") == "value1"
+    store.set_meta("key", "value2")
+    assert store.get_meta("key") == "value2"
+
+
 def test_hash_computed_before_mark_seen(tmp_path: Path) -> None:
     """The caller must be able to hash, check is_seen, then decide to
     mark_seen only after success. Simulate a 'failed' flow: hash, check,

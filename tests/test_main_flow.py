@@ -243,6 +243,7 @@ async def test_heartbeat_version_below_minimum_blocks_uploads(
             revoked=False,
             upload_count=0,
             min_agent_version="99.0.0",
+            reingest_requested_at=None,
         )
 
     monkeypatch.setattr(auth, "heartbeat", _fake_heartbeat)
@@ -292,6 +293,7 @@ async def test_heartbeat_version_ok_no_warning(
             revoked=False,
             upload_count=0,
             min_agent_version="0.1.0",
+            reingest_requested_at=None,
         )
 
     monkeypatch.setattr(auth, "heartbeat", _fake_heartbeat)
@@ -340,6 +342,7 @@ async def test_heartbeat_version_warn_once(tmp_path: Path, monkeypatch: pytest.M
             revoked=False,
             upload_count=0,
             min_agent_version="99.0.0",
+            reingest_requested_at=None,
         )
 
     monkeypatch.setattr(auth, "heartbeat", _fake_heartbeat)
@@ -713,6 +716,7 @@ async def test_resync_sets_tray_uploading(tmp_path: Path, monkeypatch: pytest.Mo
             revoked=False,
             upload_count=0,  # server says 0, local has 10 => triggers resync
             min_agent_version=None,
+            reingest_requested_at=None,
         )
 
     monkeypatch.setattr(auth, "heartbeat", _fake_heartbeat)
@@ -954,3 +958,275 @@ async def test_match_log_proper_name_no_file_mtime(
     ship_mock.assert_called_once()
     call_kwargs = ship_mock.call_args.kwargs
     assert call_kwargs.get("file_mtime") is None
+
+
+# --- _heartbeat_loop: reingest signal ---
+
+
+async def test_reingest_signal_triggers_clear_and_watcher_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When server sends a reingest timestamp, agent clears seen-files and restarts watcher."""
+    from datetime import UTC, datetime
+
+    cfg = AppConfig()
+    cfg.server.url = "https://example.test"
+    cfg.agent.api_token = "tok"
+    cfg.agent.heartbeat_interval_seconds = 30
+    dedup = DedupStore(tmp_path / "dedup.db")
+    # Seed the dedup store with files.
+    for i in range(5):
+        dedup.mark_seen(f"sha{i:04d}", tmp_path / f"file{i}.dat")
+    assert dedup.count() == 5
+
+    tray = _StubTrayWithNotify()
+    log = structlog.get_logger("test")
+    stop = asyncio.Event()
+    revoked = asyncio.Event()
+
+    watcher_started = False
+
+    class _FakeWatcher:
+        def start(self) -> None:
+            nonlocal watcher_started
+            watcher_started = True
+
+        def stop(self) -> None:
+            pass
+
+    watcher_box: list[_FakeWatcher | None] = [_FakeWatcher()]
+    reingest_ts = datetime(2026, 5, 26, 12, 0, 0, tzinfo=UTC)
+
+    async def _fake_heartbeat(*_a: object, **_kw: object) -> auth.HeartbeatResult:
+        stop.set()
+        return auth.HeartbeatResult(
+            status="ok",
+            registered_at=None,
+            revoked=False,
+            upload_count=5,
+            min_agent_version=None,
+            reingest_requested_at=reingest_ts,
+        )
+
+    monkeypatch.setattr(auth, "heartbeat", _fake_heartbeat)
+
+    version_blocked = asyncio.Event()
+    await main_mod._heartbeat_loop(
+        cfg,
+        tray,
+        dedup,
+        watcher_box,
+        _FakeWatcher,
+        stop,
+        revoked,
+        version_blocked,
+        [],
+        log,  # type: ignore[arg-type]
+    )
+    # Seen-files should be cleared.
+    assert dedup.count() == 0
+    # Meta should be preserved with the reingest timestamp (UTC-normalized).
+    assert dedup.get_meta("last_reingest_at") == reingest_ts.isoformat()
+    # Watcher should have been restarted.
+    assert watcher_started
+    assert "uploading" in tray.states
+
+
+async def test_reingest_same_timestamp_does_not_retrigger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the server sends the same reingest timestamp, agent does NOT re-trigger."""
+    from datetime import UTC, datetime
+
+    cfg = AppConfig()
+    cfg.server.url = "https://example.test"
+    cfg.agent.api_token = "tok"
+    cfg.agent.heartbeat_interval_seconds = 30
+    dedup = DedupStore(tmp_path / "dedup.db")
+
+    reingest_ts = datetime(2026, 5, 26, 12, 0, 0, tzinfo=UTC)
+    # Pre-set the meta as if we already handled this timestamp.
+    dedup.set_meta("last_reingest_at", reingest_ts.isoformat())
+    # Seed some files that should NOT be cleared.
+    for i in range(3):
+        dedup.mark_seen(f"sha{i:04d}", tmp_path / f"file{i}.dat")
+    assert dedup.count() == 3
+
+    tray = _StubTrayWithNotify()
+    log = structlog.get_logger("test")
+    stop = asyncio.Event()
+    revoked = asyncio.Event()
+
+    watcher_started = False
+
+    class _FakeWatcher:
+        def start(self) -> None:
+            nonlocal watcher_started
+            watcher_started = True
+
+        def stop(self) -> None:
+            pass
+
+    watcher_box: list[_FakeWatcher | None] = [_FakeWatcher()]
+
+    async def _fake_heartbeat(*_a: object, **_kw: object) -> auth.HeartbeatResult:
+        stop.set()
+        return auth.HeartbeatResult(
+            status="ok",
+            registered_at=None,
+            revoked=False,
+            upload_count=3,
+            min_agent_version=None,
+            reingest_requested_at=reingest_ts,
+        )
+
+    monkeypatch.setattr(auth, "heartbeat", _fake_heartbeat)
+
+    version_blocked = asyncio.Event()
+    await main_mod._heartbeat_loop(
+        cfg,
+        tray,
+        dedup,
+        watcher_box,
+        _FakeWatcher,
+        stop,
+        revoked,
+        version_blocked,
+        [],
+        log,  # type: ignore[arg-type]
+    )
+    # Files should NOT have been cleared — same timestamp.
+    assert dedup.count() == 3
+    assert not watcher_started
+
+
+async def test_reingest_newer_timestamp_retriggers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A newer reingest timestamp triggers another clear + watcher restart."""
+    from datetime import UTC, datetime
+
+    cfg = AppConfig()
+    cfg.server.url = "https://example.test"
+    cfg.agent.api_token = "tok"
+    cfg.agent.heartbeat_interval_seconds = 30
+    dedup = DedupStore(tmp_path / "dedup.db")
+
+    old_ts = datetime(2026, 5, 26, 12, 0, 0, tzinfo=UTC)
+    new_ts = datetime(2026, 5, 26, 14, 0, 0, tzinfo=UTC)
+    # Pre-set the meta with the older timestamp.
+    dedup.set_meta("last_reingest_at", old_ts.isoformat())
+    # Seed files that should be cleared on the newer reingest.
+    for i in range(4):
+        dedup.mark_seen(f"sha{i:04d}", tmp_path / f"file{i}.dat")
+    assert dedup.count() == 4
+
+    tray = _StubTrayWithNotify()
+    log = structlog.get_logger("test")
+    stop = asyncio.Event()
+    revoked = asyncio.Event()
+
+    watcher_started = False
+
+    class _FakeWatcher:
+        def start(self) -> None:
+            nonlocal watcher_started
+            watcher_started = True
+
+        def stop(self) -> None:
+            pass
+
+    watcher_box: list[_FakeWatcher | None] = [_FakeWatcher()]
+
+    async def _fake_heartbeat(*_a: object, **_kw: object) -> auth.HeartbeatResult:
+        stop.set()
+        return auth.HeartbeatResult(
+            status="ok",
+            registered_at=None,
+            revoked=False,
+            upload_count=4,
+            min_agent_version=None,
+            reingest_requested_at=new_ts,
+        )
+
+    monkeypatch.setattr(auth, "heartbeat", _fake_heartbeat)
+
+    version_blocked = asyncio.Event()
+    await main_mod._heartbeat_loop(
+        cfg,
+        tray,
+        dedup,
+        watcher_box,
+        _FakeWatcher,
+        stop,
+        revoked,
+        version_blocked,
+        [],
+        log,  # type: ignore[arg-type]
+    )
+    # Files should be cleared because the newer timestamp is greater.
+    assert dedup.count() == 0
+    assert dedup.get_meta("last_reingest_at") == new_ts.isoformat()
+    assert watcher_started
+    assert "uploading" in tray.states
+
+
+async def test_reingest_no_signal_does_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When reingest_requested_at is None, no reingest action is taken."""
+    cfg = AppConfig()
+    cfg.server.url = "https://example.test"
+    cfg.agent.api_token = "tok"
+    cfg.agent.heartbeat_interval_seconds = 30
+    dedup = DedupStore(tmp_path / "dedup.db")
+    for i in range(3):
+        dedup.mark_seen(f"sha{i:04d}", tmp_path / f"file{i}.dat")
+
+    tray = _StubTrayWithNotify()
+    log = structlog.get_logger("test")
+    stop = asyncio.Event()
+    revoked = asyncio.Event()
+
+    watcher_started = False
+
+    class _FakeWatcher:
+        def start(self) -> None:
+            nonlocal watcher_started
+            watcher_started = True
+
+        def stop(self) -> None:
+            pass
+
+    watcher_box: list[_FakeWatcher | None] = [_FakeWatcher()]
+
+    async def _fake_heartbeat(*_a: object, **_kw: object) -> auth.HeartbeatResult:
+        stop.set()
+        return auth.HeartbeatResult(
+            status="ok",
+            registered_at=None,
+            revoked=False,
+            upload_count=3,
+            min_agent_version=None,
+            reingest_requested_at=None,
+        )
+
+    monkeypatch.setattr(auth, "heartbeat", _fake_heartbeat)
+
+    version_blocked = asyncio.Event()
+    await main_mod._heartbeat_loop(
+        cfg,
+        tray,
+        dedup,
+        watcher_box,
+        _FakeWatcher,
+        stop,
+        revoked,
+        version_blocked,
+        [],
+        log,  # type: ignore[arg-type]
+    )
+    # Nothing should have changed.
+    assert dedup.count() == 3
+    assert dedup.get_meta("last_reingest_at") is None
+    assert not watcher_started

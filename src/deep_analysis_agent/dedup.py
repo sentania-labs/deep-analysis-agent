@@ -111,6 +111,11 @@ class DedupStore:
             self._db.execute("DELETE FROM seen_files")
             self._db.execute("DELETE FROM meta")
 
+    def clear_seen(self) -> None:
+        """Delete seen-files rows only, preserving the meta table."""
+        with self._lock:
+            self._db.execute("DELETE FROM seen_files")
+
     def known_hashes(self) -> set[str]:
         """Return all tracked SHA-256 hashes."""
         with self._lock:
