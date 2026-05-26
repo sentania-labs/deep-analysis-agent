@@ -1230,3 +1230,43 @@ async def test_reingest_no_signal_does_nothing(
     assert dedup.count() == 3
     assert dedup.get_meta("last_reingest_at") is None
     assert not watcher_started
+
+
+# --- _schedule_tray_notification: race when _icon is None ---
+
+
+def test_schedule_tray_notification_no_raise_when_icon_is_none() -> None:
+    """_schedule_tray_notification must not raise when tray._icon is None."""
+
+    class _TrayWithNullIcon:
+        _icon: object = None
+
+    tray = _TrayWithNullIcon()
+    # Use delay=0 so the thread finishes quickly.
+    main_mod._schedule_tray_notification(tray, "hello", delay=0)  # type: ignore[arg-type]
+    # Give the daemon thread time to run and (potentially) blow up.
+    import time
+
+    time.sleep(0.1)
+    # If we get here without an unhandled exception the guard works.
+
+
+def test_schedule_tray_notification_calls_notify_when_icon_present() -> None:
+    """When _icon is set, the notification is forwarded."""
+
+    notified: list[tuple[str, str]] = []
+
+    class _FakeIcon:
+        def notify(self, message: str, title: str) -> None:
+            notified.append((message, title))
+
+    class _TrayWithIcon:
+        _icon = _FakeIcon()
+
+    tray = _TrayWithIcon()
+    main_mod._schedule_tray_notification(tray, "test msg", title="Test", delay=0)  # type: ignore[arg-type]
+    import time
+
+    time.sleep(0.2)
+    assert len(notified) == 1
+    assert notified[0] == ("test msg", "Test")
