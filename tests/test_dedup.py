@@ -141,3 +141,93 @@ def test_hash_computed_before_mark_seen(tmp_path: Path) -> None:
 
     s2 = DedupStore(db)
     assert s2.is_seen(sha) is False  # still unseen — ready for retry
+
+
+# -- Close-safety tests: operations after close() must not raise --
+
+
+def test_mark_seen_after_close_does_not_raise(tmp_path: Path) -> None:
+    """mark_seen on a closed store is a silent no-op, not an error."""
+    db = tmp_path / "dedup.db"
+    f = tmp_path / "x.dat"
+    sha = _write(f, b"payload")
+
+    store = DedupStore(db)
+    store.close()
+    # Must not raise sqlite3.ProgrammingError
+    store.mark_seen(sha, f)
+
+
+def test_is_seen_after_close_returns_false(tmp_path: Path) -> None:
+    store = DedupStore(tmp_path / "dedup.db")
+    store.close()
+    assert store.is_seen("deadbeef") is False
+
+
+def test_is_path_unchanged_after_close_returns_false(tmp_path: Path) -> None:
+    f = tmp_path / "x.dat"
+    _write(f, b"data")
+    store = DedupStore(tmp_path / "dedup.db")
+    store.close()
+    assert store.is_path_unchanged(f) is False
+
+
+def test_count_after_close_returns_zero(tmp_path: Path) -> None:
+    store = DedupStore(tmp_path / "dedup.db")
+    store.close()
+    assert store.count() == 0
+
+
+def test_clear_after_close_does_not_raise(tmp_path: Path) -> None:
+    store = DedupStore(tmp_path / "dedup.db")
+    store.close()
+    store.clear()  # no-op, must not raise
+
+
+def test_clear_seen_after_close_does_not_raise(tmp_path: Path) -> None:
+    store = DedupStore(tmp_path / "dedup.db")
+    store.close()
+    store.clear_seen()  # no-op, must not raise
+
+
+def test_known_paths_after_close_returns_empty(tmp_path: Path) -> None:
+    store = DedupStore(tmp_path / "dedup.db")
+    store.close()
+    assert store.known_paths() == {}
+
+
+def test_known_hashes_after_close_returns_empty(tmp_path: Path) -> None:
+    store = DedupStore(tmp_path / "dedup.db")
+    store.close()
+    assert store.known_hashes() == set()
+
+
+def test_get_meta_after_close_returns_none(tmp_path: Path) -> None:
+    store = DedupStore(tmp_path / "dedup.db")
+    store.close()
+    assert store.get_meta("key") is None
+
+
+def test_set_meta_after_close_does_not_raise(tmp_path: Path) -> None:
+    store = DedupStore(tmp_path / "dedup.db")
+    store.close()
+    store.set_meta("key", "value")  # no-op, must not raise
+
+
+def test_mark_seen_after_close_is_not_persisted(tmp_path: Path) -> None:
+    """A mark_seen that races against close must not corrupt the DB.
+
+    If close() wins, the write is silently dropped. On next startup the
+    file will be re-uploaded — safe default, avoids ProgrammingError.
+    """
+    db = tmp_path / "dedup.db"
+    f = tmp_path / "x.dat"
+    sha = _write(f, b"race-payload")
+
+    store = DedupStore(db)
+    store.close()
+    store.mark_seen(sha, f)  # silent no-op
+
+    # Re-open: the entry should NOT exist.
+    s2 = DedupStore(db)
+    assert s2.is_seen(sha) is False
