@@ -1,13 +1,16 @@
-"""Tests for LogWatcher stability-check debouncing and name-glob filter."""
+"""Tests for LogWatcher stability-check debouncing, name-glob filter, and tail-scan."""
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import time
 from pathlib import Path
 
-from deep_analysis_agent.watcher import LogWatcher
+import pytest
+
+from deep_analysis_agent.watcher import LogWatcher, _tail_scan_conclusive
 
 
 def test_stability_fires_after_file_stops_changing(tmp_path: Path) -> None:
@@ -262,3 +265,128 @@ def test_no_globs_matches_any_name(tmp_path: Path) -> None:
         assert target in seen
     finally:
         watcher.stop()
+
+
+# --- Tail-scan unit tests ---------------------------------------------------
+
+
+class TestTailScanConclusive:
+    """Direct unit tests for the _tail_scan_conclusive helper."""
+
+    def test_wins_the_match(self, tmp_path: Path) -> None:
+        f = tmp_path / "Match_GameLog_001.dat"
+        f.write_bytes(b"some game data\x00\x01PlayerA wins the match 2-1\x00more")
+        assert _tail_scan_conclusive(f) is True
+
+    def test_conceded_from_match(self, tmp_path: Path) -> None:
+        f = tmp_path / "Match_GameLog_002.dat"
+        f.write_bytes(b"data\x00PlayerB has conceded from the match.\x00end")
+        assert _tail_scan_conclusive(f) is True
+
+    def test_match_tied(self, tmp_path: Path) -> None:
+        f = tmp_path / "Match_GameLog_003.dat"
+        f.write_bytes(b"data\x00Match Tied 1-1\x00end")
+        assert _tail_scan_conclusive(f) is True
+
+    def test_no_completion_signal(self, tmp_path: Path) -> None:
+        f = tmp_path / "Match_GameLog_004.dat"
+        f.write_bytes(b"PlayerA plays Island. Turn 3. PlayerB casts Lightning Bolt.")
+        assert _tail_scan_conclusive(f) is False
+
+    def test_empty_file(self, tmp_path: Path) -> None:
+        f = tmp_path / "Match_GameLog_005.dat"
+        f.write_bytes(b"")
+        assert _tail_scan_conclusive(f) is False
+
+    def test_non_gamelog_file_always_conclusive(self, tmp_path: Path) -> None:
+        """Non Match_GameLog files (e.g. grouping XML) bypass the scan."""
+        f = tmp_path / "grouping 12345.xml"
+        f.write_bytes(b"<grouping>no match result here</grouping>")
+        assert _tail_scan_conclusive(f) is True
+
+    def test_missing_file(self, tmp_path: Path) -> None:
+        f = tmp_path / "Match_GameLog_gone.dat"
+        assert _tail_scan_conclusive(f) is False
+
+    def test_signal_in_tail_of_large_file(self, tmp_path: Path) -> None:
+        """Completion signal near EOF is found even in a large file."""
+        f = tmp_path / "Match_GameLog_big.dat"
+        padding = b"\x00" * 100_000
+        f.write_bytes(padding + b"PlayerX wins the match 2-0\x00end")
+        assert _tail_scan_conclusive(f) is True
+
+    def test_signal_only_before_tail_window(self, tmp_path: Path) -> None:
+        """A signal that exists only outside the last 64KB is not found."""
+        f = tmp_path / "Match_GameLog_early.dat"
+        # Put the signal at the very start, then pad with 128KB of zeros
+        # (well beyond the 64KB tail window).
+        f.write_bytes(b"PlayerA wins the match 2-0" + b"\x00" * (128 * 1024))
+        assert _tail_scan_conclusive(f) is False
+
+    def test_case_insensitive(self, tmp_path: Path) -> None:
+        f = tmp_path / "Match_GameLog_case.dat"
+        f.write_bytes(b"PLAYERX WINS THE MATCH 2-1")
+        assert _tail_scan_conclusive(f) is True
+
+
+class TestTailScanIntegration:
+    """Integration tests: the watcher fires callback AND logs warning for inconclusive."""
+
+    def test_conclusive_match_no_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A file with a match-completion signal fires callback without warning."""
+        seen: list[Path] = []
+        event = threading.Event()
+
+        def on_ready(p: Path) -> None:
+            seen.append(p)
+            event.set()
+
+        watcher = LogWatcher(
+            watch_dir=tmp_path,
+            suffixes=frozenset({".dat"}),
+            stability_seconds=0.2,
+            on_file_ready=on_ready,
+            name_globs=["Match_GameLog_*.dat"],
+        )
+        watcher.start()
+        try:
+            target = tmp_path / "Match_GameLog_conclusive.dat"
+            target.write_bytes(b"PlayerA wins the match 2-0")
+            assert event.wait(timeout=3.0), "callback never fired"
+            assert target in seen
+        finally:
+            watcher.stop()
+
+    def test_inconclusive_match_fires_with_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """An inconclusive file still fires callback but emits a warning."""
+        seen: list[Path] = []
+        event = threading.Event()
+
+        def on_ready(p: Path) -> None:
+            seen.append(p)
+            event.set()
+
+        watcher = LogWatcher(
+            watch_dir=tmp_path,
+            suffixes=frozenset({".dat"}),
+            stability_seconds=0.2,
+            on_file_ready=on_ready,
+            name_globs=["Match_GameLog_*.dat"],
+        )
+        # Use pytest's caplog.at_level to capture WARNING+ from our logger.
+        with caplog.at_level(logging.WARNING, logger="deep_analysis_agent.watcher"):
+            watcher.start()
+            try:
+                target = tmp_path / "Match_GameLog_incomplete.dat"
+                target.write_bytes(b"Turn 5: PlayerA plays Island.")
+                assert event.wait(timeout=3.0), "callback never fired"
+                assert target in seen
+            finally:
+                watcher.stop()
+            assert any("inconclusive_match_upload" in rec.message for rec in caplog.records), (
+                f"expected inconclusive warning, got: {[r.message for r in caplog.records]}"
+            )

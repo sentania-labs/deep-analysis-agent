@@ -34,6 +34,27 @@ _POLL_INTERVAL = 0.2  # seconds between stability polls
 _MAX_STABILITY_WAIT = 6 * 60 * 60.0
 
 
+def _tail_scan_conclusive(path: Path) -> bool:
+    """Read the file tail and check for a match-completion signal.
+
+    Returns True if the file contains a clear winner/loser/tie indicator,
+    False if the match appears inconclusive.  Non-match files (e.g.
+    grouping XML) are always treated as conclusive since the concept of
+    match completion doesn't apply to them.
+
+    Delegates to :func:`match_classifier.classify_match` for the actual
+    byte-level scan so the logic lives in one place.
+    """
+    # Only game-log .dat files need the scan; other watched file types
+    # (grouping XML, etc.) don't have match results.
+    if not fnmatch.fnmatch(path.name, "Match_GameLog_*.dat"):
+        return True
+
+    from .match_classifier import classify_match
+
+    return classify_match(path) == "complete"
+
+
 class _Handler(FileSystemEventHandler):
     def __init__(
         self,
@@ -180,6 +201,8 @@ class LogWatcher:
                     logger.debug("dedup_skip path=%s", item)
                     continue
                 if self._wait_stable(item):
+                    if not _tail_scan_conclusive(item):
+                        logger.warning("inconclusive_match_upload path=%s", item)
                     self._cb(item)
             except Exception:
                 logger.exception("watcher callback failed for %s", item)
