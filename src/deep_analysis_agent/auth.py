@@ -43,7 +43,7 @@ class HeartbeatResult:
     revoked: bool
     upload_count: int
     min_agent_version: str | None
-    reingest_requested_at: datetime | None
+    reingest_requested_at: datetime | None = None
 
 
 def _timeout() -> httpx.Timeout:
@@ -149,7 +149,9 @@ async def heartbeat(
 
     data = resp.json()
 
-    def _parse_dt(raw: str | None) -> datetime | None:
+    def _parse_dt(raw: object) -> datetime | None:
+        if not isinstance(raw, str):
+            return None
         if not raw:
             return None
         try:

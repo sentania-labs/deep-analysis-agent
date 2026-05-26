@@ -8,6 +8,7 @@ import fnmatch
 import sys
 import threading
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 
 import structlog
@@ -209,8 +210,9 @@ async def _heartbeat_loop(
             # Reingest signal: server admin requested a full re-upload.
             if result.reingest_requested_at is not None:
                 last_reingest = dedup.get_meta("last_reingest_at")
-                server_ts = result.reingest_requested_at.isoformat()
-                if last_reingest is None or server_ts > last_reingest:
+                server_dt = result.reingest_requested_at.astimezone(UTC)
+                server_ts = server_dt.isoformat()
+                if last_reingest is None or server_dt > datetime.fromisoformat(last_reingest):
                     # Write meta FIRST to prevent re-trigger on next heartbeat.
                     dedup.set_meta("last_reingest_at", server_ts)
                     dedup.clear_seen()

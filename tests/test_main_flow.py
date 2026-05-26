@@ -1010,6 +1010,7 @@ async def test_reingest_signal_triggers_clear_and_watcher_restart(
 
     monkeypatch.setattr(auth, "heartbeat", _fake_heartbeat)
 
+    version_blocked = asyncio.Event()
     await main_mod._heartbeat_loop(
         cfg,
         tray,
@@ -1018,11 +1019,13 @@ async def test_reingest_signal_triggers_clear_and_watcher_restart(
         _FakeWatcher,
         stop,
         revoked,
+        version_blocked,
+        [],
         log,  # type: ignore[arg-type]
     )
     # Seen-files should be cleared.
     assert dedup.count() == 0
-    # Meta should be preserved with the reingest timestamp.
+    # Meta should be preserved with the reingest timestamp (UTC-normalized).
     assert dedup.get_meta("last_reingest_at") == reingest_ts.isoformat()
     # Watcher should have been restarted.
     assert watcher_started
@@ -1079,6 +1082,7 @@ async def test_reingest_same_timestamp_does_not_retrigger(
 
     monkeypatch.setattr(auth, "heartbeat", _fake_heartbeat)
 
+    version_blocked = asyncio.Event()
     await main_mod._heartbeat_loop(
         cfg,
         tray,
@@ -1087,6 +1091,8 @@ async def test_reingest_same_timestamp_does_not_retrigger(
         _FakeWatcher,
         stop,
         revoked,
+        version_blocked,
+        [],
         log,  # type: ignore[arg-type]
     )
     # Files should NOT have been cleared — same timestamp.
@@ -1145,6 +1151,7 @@ async def test_reingest_newer_timestamp_retriggers(
 
     monkeypatch.setattr(auth, "heartbeat", _fake_heartbeat)
 
+    version_blocked = asyncio.Event()
     await main_mod._heartbeat_loop(
         cfg,
         tray,
@@ -1153,6 +1160,8 @@ async def test_reingest_newer_timestamp_retriggers(
         _FakeWatcher,
         stop,
         revoked,
+        version_blocked,
+        [],
         log,  # type: ignore[arg-type]
     )
     # Files should be cleared because the newer timestamp is greater.
@@ -1204,6 +1213,7 @@ async def test_reingest_no_signal_does_nothing(
 
     monkeypatch.setattr(auth, "heartbeat", _fake_heartbeat)
 
+    version_blocked = asyncio.Event()
     await main_mod._heartbeat_loop(
         cfg,
         tray,
@@ -1212,6 +1222,8 @@ async def test_reingest_no_signal_does_nothing(
         _FakeWatcher,
         stop,
         revoked,
+        version_blocked,
+        [],
         log,  # type: ignore[arg-type]
     )
     # Nothing should have changed.
