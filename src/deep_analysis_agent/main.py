@@ -77,11 +77,12 @@ async def _heartbeat_loop(
     build_watcher: Callable[[], LogWatcher],
     stop_event: asyncio.Event,
     revoked_event: asyncio.Event,
+    version_blocked: asyncio.Event,
     log: structlog.stdlib.BoundLogger,
 ) -> None:
     assert config.agent.api_token is not None
     resync_done = False
-    version_warned = False
+    version_notified = False
     while not stop_event.is_set():
         # Re-read each iteration so SettingsWindow reload picks up new interval.
         interval = max(30, config.agent.heartbeat_interval_seconds)
@@ -109,27 +110,51 @@ async def _heartbeat_loop(
                 return
             log.debug("heartbeat_ok", status=result.status)
 
-            # Version floor check — warn once per session.
-            if not version_warned and result.min_agent_version:
+            # Version floor check — block uploads when below minimum,
+            # resume when the version meets the requirement (e.g. after update).
+            if result.min_agent_version:
                 agent_ver = _parse_version(__version__)
                 required_ver = _parse_version(result.min_agent_version)
                 if agent_ver < required_ver:
-                    version_warned = True
-                    log.warning(
-                        "version_below_minimum",
-                        agent=__version__,
-                        required=result.min_agent_version,
-                    )
-                    tray.set_state("error")
-                    if tray._icon is not None:
-                        try:
-                            tray._icon.notify(
-                                f"Update required: server requires agent "
-                                f"v{result.min_agent_version} or newer",
-                                "Deep Analysis",
-                            )
-                        except Exception:
-                            log.debug("tray_notify_failed")
+                    if not version_blocked.is_set():
+                        version_blocked.set()
+                        log.warning(
+                            "version_below_minimum — uploads paused",
+                            agent=__version__,
+                            required=result.min_agent_version,
+                        )
+                        tray.set_state("error")
+                    # Show notification once per session so the tray
+                    # doesn't spam the user on every heartbeat.
+                    if not version_notified:
+                        version_notified = True
+                        if tray._icon is not None:
+                            try:
+                                tray._icon.notify(
+                                    f"Upload paused: server requires agent "
+                                    f"v{result.min_agent_version} or newer. "
+                                    f"Please update.",
+                                    "Deep Analysis",
+                                )
+                            except Exception:
+                                log.debug("tray_notify_failed")
+                else:
+                    if version_blocked.is_set():
+                        version_blocked.clear()
+                        version_notified = False
+                        log.info(
+                            "version_now_acceptable — uploads resumed",
+                            agent=__version__,
+                            required=result.min_agent_version,
+                        )
+                        tray.set_state("idle")
+            else:
+                # No minimum set by server — ensure we're not blocked.
+                if version_blocked.is_set():
+                    version_blocked.clear()
+                    version_notified = False
+                    log.info("version_block_cleared — no minimum required")
+                    tray.set_state("idle")
 
             # Resync check: trigger once per session if server count is
             # significantly lower than local dedup count.
@@ -171,10 +196,14 @@ async def _handle_file(
     dedup: DedupStore,
     tray: TrayIcon,
     revoked_event: asyncio.Event,
+    version_blocked: asyncio.Event,
     log: structlog.stdlib.BoundLogger,
 ) -> None:
     if revoked_event.is_set():
         log.info("skip_revoked", path=str(path))
+        return
+    if version_blocked.is_set():
+        log.info("skip_version_blocked", path=str(path))
         return
     if dedup.is_path_unchanged(path):
         log.info("skip_already_uploaded", path=str(path))
@@ -406,6 +435,7 @@ async def _async_main() -> int:
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
     revoked_event = asyncio.Event()
+    version_blocked = asyncio.Event()
 
     try:
         dedup = DedupStore(dedup_path())
@@ -418,7 +448,8 @@ async def _async_main() -> int:
 
         def on_file_ready(path: Path) -> None:
             fut = asyncio.run_coroutine_threadsafe(
-                _handle_file(path, config, dedup, tray, revoked_event, log), loop
+                _handle_file(path, config, dedup, tray, revoked_event, version_blocked, log),
+                loop,
             )
             try:
                 fut.result(timeout=600)
@@ -510,6 +541,7 @@ async def _async_main() -> int:
                 _build_watcher,
                 stop_event,
                 revoked_event,
+                version_blocked,
                 log,
             ),
             name="heartbeat",
