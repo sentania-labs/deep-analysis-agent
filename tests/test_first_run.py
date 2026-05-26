@@ -89,9 +89,7 @@ class TestResolveMtgoLogDir:
         # Falls back to the default path even though it doesn't exist.
         assert config.mtgo.log_dir == default_dir
 
-    def test_uses_user_selected_dir(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_uses_user_selected_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """When default doesn't exist but user picks a valid dir, uses that."""
         default_dir = tmp_path / "nonexistent"
         chosen_dir = tmp_path / "user_picked"
