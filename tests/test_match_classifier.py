@@ -26,6 +26,12 @@ def test_classify_complete_case_insensitive(tmp_path: Path) -> None:
     assert classify_match(p) == "complete"
 
 
+def test_classify_complete_on_match_tied(tmp_path: Path) -> None:
+    p = tmp_path / "Match_GameLog_tied.dat"
+    p.write_bytes(b"...game data...\nMatch Tied 1-1\n")
+    assert classify_match(p) == "complete"
+
+
 def test_classify_inconclusive_when_no_marker(tmp_path: Path) -> None:
     p = tmp_path / "Match_GameLog_4.dat"
     p.write_bytes(b"opening hands\nturn 1\nturn 2\n... mid-game ...")
