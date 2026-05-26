@@ -387,6 +387,6 @@ class TestTailScanIntegration:
                 assert target in seen
             finally:
                 watcher.stop()
-            assert any(
-                "inconclusive_match_upload" in rec.message for rec in caplog.records
-            ), f"expected inconclusive warning, got: {[r.message for r in caplog.records]}"
+            assert any("inconclusive_match_upload" in rec.message for rec in caplog.records), (
+                f"expected inconclusive warning, got: {[r.message for r in caplog.records]}"
+            )
