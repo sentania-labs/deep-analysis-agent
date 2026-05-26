@@ -27,6 +27,7 @@ _STARTUP_BANNER_RULE = "=" * 60
 
 _HASH_RETRIES = 3
 _HASH_RETRY_DELAY = 2.0
+_DEFERRED_PATHS_WARN = 500  # log a warning when deferred queue exceeds this
 
 # Mapping of filename glob patterns to server content_type values.
 _CONTENT_TYPE_MAP: list[tuple[str, str]] = [
@@ -77,11 +78,13 @@ async def _heartbeat_loop(
     build_watcher: Callable[[], LogWatcher],
     stop_event: asyncio.Event,
     revoked_event: asyncio.Event,
+    version_blocked: asyncio.Event,
+    deferred_paths: list[Path],
     log: structlog.stdlib.BoundLogger,
 ) -> None:
     assert config.agent.api_token is not None
     resync_done = False
-    version_warned = False
+    version_notified = False
     while not stop_event.is_set():
         # Re-read each iteration so SettingsWindow reload picks up new interval.
         interval = max(30, config.agent.heartbeat_interval_seconds)
@@ -109,27 +112,69 @@ async def _heartbeat_loop(
                 return
             log.debug("heartbeat_ok", status=result.status)
 
-            # Version floor check — warn once per session.
-            if not version_warned and result.min_agent_version:
+            # Version floor check — block uploads when below minimum,
+            # resume when the version meets the requirement (e.g. after update).
+            if result.min_agent_version:
                 agent_ver = _parse_version(__version__)
                 required_ver = _parse_version(result.min_agent_version)
                 if agent_ver < required_ver:
-                    version_warned = True
-                    log.warning(
-                        "version_below_minimum",
-                        agent=__version__,
-                        required=result.min_agent_version,
+                    if not version_blocked.is_set():
+                        version_blocked.set()
+                        log.warning(
+                            "version_below_minimum — uploads paused",
+                            agent=__version__,
+                            required=result.min_agent_version,
+                        )
+                        tray.set_state("error")
+                    # Show notification once per session so the tray
+                    # doesn't spam the user on every heartbeat.
+                    if not version_notified:
+                        version_notified = True
+                        if tray._icon is not None:
+                            try:
+                                tray._icon.notify(
+                                    f"Upload paused: server requires agent "
+                                    f"v{result.min_agent_version} or newer. "
+                                    f"Please update.",
+                                    "Deep Analysis",
+                                )
+                            except Exception:
+                                log.debug("tray_notify_failed")
+                else:
+                    if version_blocked.is_set():
+                        version_blocked.clear()
+                        version_notified = False
+                        log.info(
+                            "version_now_acceptable — uploads resumed",
+                            agent=__version__,
+                            required=result.min_agent_version,
+                        )
+                        tray.set_state("idle")
+                        await _drain_deferred(
+                            deferred_paths,
+                            config,
+                            dedup,
+                            tray,
+                            revoked_event,
+                            version_blocked,
+                            log,
+                        )
+            else:
+                # No minimum set by server — ensure we're not blocked.
+                if version_blocked.is_set():
+                    version_blocked.clear()
+                    version_notified = False
+                    log.info("version_block_cleared — no minimum required")
+                    tray.set_state("idle")
+                    await _drain_deferred(
+                        deferred_paths,
+                        config,
+                        dedup,
+                        tray,
+                        revoked_event,
+                        version_blocked,
+                        log,
                     )
-                    tray.set_state("error")
-                    if tray._icon is not None:
-                        try:
-                            tray._icon.notify(
-                                f"Update required: server requires agent "
-                                f"v{result.min_agent_version} or newer",
-                                "Deep Analysis",
-                            )
-                        except Exception:
-                            log.debug("tray_notify_failed")
 
             # Resync check: trigger once per session if server count is
             # significantly lower than local dedup count.
@@ -165,16 +210,66 @@ async def _heartbeat_loop(
             await asyncio.wait_for(stop_event.wait(), timeout=interval)
 
 
+async def _drain_deferred(
+    deferred_paths: list[Path],
+    config: AppConfig,
+    dedup: DedupStore,
+    tray: TrayIcon,
+    revoked_event: asyncio.Event,
+    version_blocked: asyncio.Event,
+    log: structlog.stdlib.BoundLogger,
+) -> None:
+    """Process all paths that were deferred during a version block."""
+    if not deferred_paths:
+        return
+    batch = list(deferred_paths)
+    deferred_paths.clear()
+    log.info("draining_deferred_paths", count=len(batch))
+    for p in batch:
+        if version_blocked.is_set() or revoked_event.is_set():
+            # Re-blocked mid-drain — put remaining paths back.
+            deferred_paths.extend(batch[batch.index(p) :])
+            log.info("drain_interrupted", remaining=len(deferred_paths))
+            return
+        await _handle_file(
+            p,
+            config,
+            dedup,
+            tray,
+            revoked_event,
+            version_blocked,
+            deferred_paths,
+            log,
+        )
+
+
 async def _handle_file(
     path: Path,
     config: AppConfig,
     dedup: DedupStore,
     tray: TrayIcon,
     revoked_event: asyncio.Event,
+    version_blocked: asyncio.Event,
+    deferred_paths: list[Path],
     log: structlog.stdlib.BoundLogger,
 ) -> None:
     if revoked_event.is_set():
         log.info("skip_revoked", path=str(path))
+        return
+    if version_blocked.is_set():
+        deferred_paths.append(path)
+        if len(deferred_paths) % 50 == 0 or len(deferred_paths) == 1:
+            log.info(
+                "file_deferred_version_blocked",
+                path=str(path),
+                deferred_count=len(deferred_paths),
+            )
+        if len(deferred_paths) == _DEFERRED_PATHS_WARN:
+            log.warning(
+                "deferred_paths_high",
+                count=len(deferred_paths),
+                limit=_DEFERRED_PATHS_WARN,
+            )
         return
     if dedup.is_path_unchanged(path):
         log.info("skip_already_uploaded", path=str(path))
@@ -406,6 +501,8 @@ async def _async_main() -> int:
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
     revoked_event = asyncio.Event()
+    version_blocked = asyncio.Event()
+    deferred_paths: list[Path] = []
 
     try:
         dedup = DedupStore(dedup_path())
@@ -418,7 +515,17 @@ async def _async_main() -> int:
 
         def on_file_ready(path: Path) -> None:
             fut = asyncio.run_coroutine_threadsafe(
-                _handle_file(path, config, dedup, tray, revoked_event, log), loop
+                _handle_file(
+                    path,
+                    config,
+                    dedup,
+                    tray,
+                    revoked_event,
+                    version_blocked,
+                    deferred_paths,
+                    log,
+                ),
+                loop,
             )
             try:
                 fut.result(timeout=600)
@@ -510,6 +617,8 @@ async def _async_main() -> int:
                 _build_watcher,
                 stop_event,
                 revoked_event,
+                version_blocked,
+                deferred_paths,
                 log,
             ),
             name="heartbeat",
