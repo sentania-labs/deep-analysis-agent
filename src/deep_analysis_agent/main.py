@@ -27,6 +27,7 @@ _STARTUP_BANNER_RULE = "=" * 60
 
 _HASH_RETRIES = 3
 _HASH_RETRY_DELAY = 2.0
+_DEFERRED_PATHS_WARN = 500  # log a warning when deferred queue exceeds this
 
 # Mapping of filename glob patterns to server content_type values.
 _CONTENT_TYPE_MAP: list[tuple[str, str]] = [
@@ -78,6 +79,7 @@ async def _heartbeat_loop(
     stop_event: asyncio.Event,
     revoked_event: asyncio.Event,
     version_blocked: asyncio.Event,
+    deferred_paths: list[Path],
     log: structlog.stdlib.BoundLogger,
 ) -> None:
     assert config.agent.api_token is not None
@@ -148,6 +150,15 @@ async def _heartbeat_loop(
                             required=result.min_agent_version,
                         )
                         tray.set_state("idle")
+                        await _drain_deferred(
+                            deferred_paths,
+                            config,
+                            dedup,
+                            tray,
+                            revoked_event,
+                            version_blocked,
+                            log,
+                        )
             else:
                 # No minimum set by server — ensure we're not blocked.
                 if version_blocked.is_set():
@@ -155,6 +166,15 @@ async def _heartbeat_loop(
                     version_notified = False
                     log.info("version_block_cleared — no minimum required")
                     tray.set_state("idle")
+                    await _drain_deferred(
+                        deferred_paths,
+                        config,
+                        dedup,
+                        tray,
+                        revoked_event,
+                        version_blocked,
+                        log,
+                    )
 
             # Resync check: trigger once per session if server count is
             # significantly lower than local dedup count.
@@ -190,8 +210,8 @@ async def _heartbeat_loop(
             await asyncio.wait_for(stop_event.wait(), timeout=interval)
 
 
-async def _handle_file(
-    path: Path,
+async def _drain_deferred(
+    deferred_paths: list[Path],
     config: AppConfig,
     dedup: DedupStore,
     tray: TrayIcon,
@@ -199,11 +219,57 @@ async def _handle_file(
     version_blocked: asyncio.Event,
     log: structlog.stdlib.BoundLogger,
 ) -> None:
+    """Process all paths that were deferred during a version block."""
+    if not deferred_paths:
+        return
+    batch = list(deferred_paths)
+    deferred_paths.clear()
+    log.info("draining_deferred_paths", count=len(batch))
+    for p in batch:
+        if version_blocked.is_set() or revoked_event.is_set():
+            # Re-blocked mid-drain — put remaining paths back.
+            deferred_paths.extend(batch[batch.index(p) :])
+            log.info("drain_interrupted", remaining=len(deferred_paths))
+            return
+        await _handle_file(
+            p,
+            config,
+            dedup,
+            tray,
+            revoked_event,
+            version_blocked,
+            deferred_paths,
+            log,
+        )
+
+
+async def _handle_file(
+    path: Path,
+    config: AppConfig,
+    dedup: DedupStore,
+    tray: TrayIcon,
+    revoked_event: asyncio.Event,
+    version_blocked: asyncio.Event,
+    deferred_paths: list[Path],
+    log: structlog.stdlib.BoundLogger,
+) -> None:
     if revoked_event.is_set():
         log.info("skip_revoked", path=str(path))
         return
     if version_blocked.is_set():
-        log.info("skip_version_blocked", path=str(path))
+        deferred_paths.append(path)
+        if len(deferred_paths) % 50 == 0 or len(deferred_paths) == 1:
+            log.info(
+                "file_deferred_version_blocked",
+                path=str(path),
+                deferred_count=len(deferred_paths),
+            )
+        if len(deferred_paths) == _DEFERRED_PATHS_WARN:
+            log.warning(
+                "deferred_paths_high",
+                count=len(deferred_paths),
+                limit=_DEFERRED_PATHS_WARN,
+            )
         return
     if dedup.is_path_unchanged(path):
         log.info("skip_already_uploaded", path=str(path))
@@ -436,6 +502,7 @@ async def _async_main() -> int:
     stop_event = asyncio.Event()
     revoked_event = asyncio.Event()
     version_blocked = asyncio.Event()
+    deferred_paths: list[Path] = []
 
     try:
         dedup = DedupStore(dedup_path())
@@ -448,7 +515,16 @@ async def _async_main() -> int:
 
         def on_file_ready(path: Path) -> None:
             fut = asyncio.run_coroutine_threadsafe(
-                _handle_file(path, config, dedup, tray, revoked_event, version_blocked, log),
+                _handle_file(
+                    path,
+                    config,
+                    dedup,
+                    tray,
+                    revoked_event,
+                    version_blocked,
+                    deferred_paths,
+                    log,
+                ),
                 loop,
             )
             try:
@@ -542,6 +618,7 @@ async def _async_main() -> int:
                 stop_event,
                 revoked_event,
                 version_blocked,
+                deferred_paths,
                 log,
             ),
             name="heartbeat",

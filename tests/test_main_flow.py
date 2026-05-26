@@ -50,7 +50,7 @@ async def test_skip_if_seen(
     monkeypatch.setattr(shipper, "ship_file", ship_mock)
 
     log = structlog.get_logger("test")
-    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), log)  # type: ignore[arg-type]
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), [], log)  # type: ignore[arg-type]
     ship_mock.assert_not_called()
 
 
@@ -64,7 +64,7 @@ async def test_mark_seen_after_ship(
     monkeypatch.setattr(shipper, "ship_file", ship_mock)
 
     log = structlog.get_logger("test")
-    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), log)  # type: ignore[arg-type]
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), [], log)  # type: ignore[arg-type]
 
     sha = dedup.hash_file(sample)
     assert dedup.is_seen(sha) is True
@@ -82,7 +82,7 @@ async def test_no_mark_on_ship_failure(
     monkeypatch.setattr(shipper, "ship_file", ship_mock)
 
     log = structlog.get_logger("test")
-    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), log)  # type: ignore[arg-type]
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), [], log)  # type: ignore[arg-type]
 
     sha = dedup.hash_file(sample)
     assert dedup.is_seen(sha) is False
@@ -113,7 +113,7 @@ async def test_permission_error_retries_then_succeeds(
     monkeypatch.setattr(shipper, "ship_file", ship_mock)
 
     log = structlog.get_logger("test")
-    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), log)  # type: ignore[arg-type]
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), [], log)  # type: ignore[arg-type]
 
     assert call_count == 2
     ship_mock.assert_called_once()
@@ -142,7 +142,7 @@ async def test_permission_error_exhausts_retries(
     monkeypatch.setattr(shipper, "ship_file", ship_mock)
 
     log = structlog.get_logger("test")
-    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), log)  # type: ignore[arg-type]
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), [], log)  # type: ignore[arg-type]
 
     assert call_count == 3
     ship_mock.assert_not_called()
@@ -169,7 +169,7 @@ async def test_non_permission_oserror_no_retry(
     monkeypatch.setattr(shipper, "ship_file", ship_mock)
 
     log = structlog.get_logger("test")
-    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), log)  # type: ignore[arg-type]
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), [], log)  # type: ignore[arg-type]
 
     assert call_count == 1
     ship_mock.assert_not_called()
@@ -257,6 +257,7 @@ async def test_heartbeat_version_below_minimum_blocks_uploads(
         stop,
         revoked,
         version_blocked,
+        [],
         log,  # type: ignore[arg-type]
     )
     assert "error" in tray.states
@@ -305,6 +306,7 @@ async def test_heartbeat_version_ok_no_warning(
         stop,
         revoked,
         version_blocked,
+        [],
         log,  # type: ignore[arg-type]
     )
     assert "error" not in tray.states
@@ -352,6 +354,7 @@ async def test_heartbeat_version_warn_once(tmp_path: Path, monkeypatch: pytest.M
         stop,
         revoked,
         version_blocked,
+        [],
         log,  # type: ignore[arg-type]
     )
     # notify should have been called exactly once despite multiple heartbeats.
@@ -362,11 +365,11 @@ async def test_heartbeat_version_warn_once(tmp_path: Path, monkeypatch: pytest.M
 # --- version lockout: _handle_file skips when blocked ---
 
 
-async def test_handle_file_skips_when_version_blocked(
+async def test_handle_file_defers_when_version_blocked(
     ctx: tuple[AppConfig, DedupStore, _StubTray, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """When version_blocked is set, _handle_file skips the upload entirely."""
+    """When version_blocked is set, _handle_file defers the path instead of dropping it."""
     cfg, dedup, tray, sample = ctx
 
     ship_mock = AsyncMock()
@@ -374,11 +377,22 @@ async def test_handle_file_skips_when_version_blocked(
 
     version_blocked = asyncio.Event()
     version_blocked.set()  # simulate version lockout
+    deferred: list[Path] = []
 
     log = structlog.get_logger("test")
-    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), version_blocked, log)  # type: ignore[arg-type]
+    await main_mod._handle_file(
+        sample,
+        cfg,
+        dedup,
+        tray,
+        asyncio.Event(),
+        version_blocked,
+        deferred,
+        log,
+    )  # type: ignore[arg-type]
 
     ship_mock.assert_not_called()
+    assert sample in deferred, "blocked file should be added to deferred list"
 
 
 async def test_handle_file_proceeds_when_version_not_blocked(
@@ -394,19 +408,22 @@ async def test_handle_file_proceeds_when_version_not_blocked(
     version_blocked = asyncio.Event()  # not set
 
     log = structlog.get_logger("test")
-    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), version_blocked, log)  # type: ignore[arg-type]
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), version_blocked, [], log)  # type: ignore[arg-type]
 
     ship_mock.assert_called_once()
     assert tray.states[-1] == "idle"
 
 
-async def test_version_block_cleared_after_update_resumes_uploads(
+async def test_version_block_cleared_after_update_drains_deferred(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """After version goes from blocked to acceptable, uploads resume.
+    """After version goes from blocked to acceptable, deferred files are drained.
 
-    We run two heartbeat-loop passes sharing the same version_blocked event:
-    pass 1 blocks (version too old), pass 2 unblocks (requirement lowered).
+    We run two heartbeat-loop passes sharing the same version_blocked event
+    and deferred_paths list:
+    pass 1 blocks (version too old), then _handle_file defers the file;
+    pass 2 unblocks (requirement lowered) and the heartbeat loop drains
+    deferred_paths automatically.
     """
     cfg = AppConfig()
     cfg.server.url = "https://example.test"
@@ -417,6 +434,7 @@ async def test_version_block_cleared_after_update_resumes_uploads(
     log = structlog.get_logger("test")
     watcher_box: list[None] = [None]
     version_blocked = asyncio.Event()
+    deferred: list[Path] = []
 
     # --- Pass 1: version too old → block uploads ---
     stop1 = asyncio.Event()
@@ -443,19 +461,30 @@ async def test_version_block_cleared_after_update_resumes_uploads(
         stop1,
         revoked1,
         version_blocked,
+        deferred,
         log,  # type: ignore[arg-type]
     )
     assert version_blocked.is_set(), "should be blocked after first pass"
 
-    # Uploads are blocked.
+    # File arrives while blocked — should be deferred, not dropped.
     sample = tmp_path / "match.dat"
     sample.write_bytes(b"payload")
     ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, file_id="f1"))
     monkeypatch.setattr(shipper, "ship_file", ship_mock)
-    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), version_blocked, log)  # type: ignore[arg-type]
+    await main_mod._handle_file(
+        sample,
+        cfg,
+        dedup,
+        tray,
+        asyncio.Event(),
+        version_blocked,
+        deferred,
+        log,
+    )  # type: ignore[arg-type]
     ship_mock.assert_not_called()
+    assert sample in deferred, "file should be in the deferred list"
 
-    # --- Pass 2: version now acceptable → unblock ---
+    # --- Pass 2: version now acceptable → unblock + drain ---
     stop2 = asyncio.Event()
     revoked2 = asyncio.Event()
 
@@ -480,15 +509,93 @@ async def test_version_block_cleared_after_update_resumes_uploads(
         stop2,
         revoked2,
         version_blocked,
+        deferred,
         log,  # type: ignore[arg-type]
     )
     assert not version_blocked.is_set(), "should be unblocked after second pass"
-    assert tray.states[-1] == "idle", "tray should return to idle after version unblock"
 
-    # Uploads work again.
-    ship_mock.reset_mock()
-    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), version_blocked, log)  # type: ignore[arg-type]
+    # The heartbeat loop should have drained the deferred file automatically.
     ship_mock.assert_called_once()
+    assert len(deferred) == 0, "deferred list should be empty after drain"
+
+
+async def test_deferred_files_processed_in_order_after_unblock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Multiple files deferred during a version block are drained in FIFO order."""
+    cfg = AppConfig()
+    cfg.server.url = "https://example.test"
+    cfg.agent.api_token = "tok"
+    cfg.agent.heartbeat_interval_seconds = 30
+    dedup = DedupStore(tmp_path / "dedup.db")
+    tray = _StubTrayWithNotify()
+    log = structlog.get_logger("test")
+    watcher_box: list[None] = [None]
+    version_blocked = asyncio.Event()
+    deferred: list[Path] = []
+
+    # Block uploads.
+    version_blocked.set()
+
+    # Simulate three files arriving while blocked.
+    shipped_order: list[str] = []
+    files = []
+    for i in range(3):
+        f = tmp_path / f"Match_GameLog_{i:05d}.dat"
+        f.write_bytes(f"payload-{i}".encode())
+        files.append(f)
+        await main_mod._handle_file(
+            f,
+            cfg,
+            dedup,
+            tray,
+            asyncio.Event(),
+            version_blocked,
+            deferred,
+            log,
+        )  # type: ignore[arg-type]
+
+    assert len(deferred) == 3
+
+    # Track ship order.
+    async def _ship_tracking(*args: object, **kwargs: object) -> shipper.UploadResult:
+        path_arg = args[2]  # positional: url, token, path
+        shipped_order.append(path_arg.name)
+        return shipper.UploadResult(deduped=False, file_id="fx")
+
+    monkeypatch.setattr(shipper, "ship_file", _ship_tracking)
+
+    # Unblock via heartbeat.
+    stop = asyncio.Event()
+
+    async def _hb_ok(*_a: object, **_kw: object) -> auth.HeartbeatResult:
+        stop.set()
+        return auth.HeartbeatResult(
+            status="ok",
+            registered_at=None,
+            revoked=False,
+            upload_count=0,
+            min_agent_version="0.0.1",
+        )
+
+    monkeypatch.setattr(auth, "heartbeat", _hb_ok)
+
+    await main_mod._heartbeat_loop(
+        cfg,
+        tray,
+        dedup,
+        watcher_box,
+        lambda: None,
+        stop,
+        asyncio.Event(),
+        version_blocked,
+        deferred,
+        log,  # type: ignore[arg-type]
+    )
+
+    assert len(deferred) == 0, "all deferred files should be drained"
+    assert len(shipped_order) == 3, "all three files should have been shipped"
+    assert shipped_order == [f.name for f in files], "files should be shipped in FIFO order"
 
 
 # --- _heartbeat_loop: resync sets tray to uploading ---
@@ -539,7 +646,7 @@ async def test_handle_file_passes_content_type_decklist(
     monkeypatch.setattr(shipper, "ship_file", ship_mock)
 
     log = structlog.get_logger("test")
-    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), log)  # type: ignore[arg-type]
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), [], log)  # type: ignore[arg-type]
 
     ship_mock.assert_called_once()
     call_kwargs = ship_mock.call_args
@@ -558,7 +665,7 @@ async def test_handle_file_passes_content_type_match_log(
     monkeypatch.setattr(shipper, "ship_file", ship_mock)
 
     log = structlog.get_logger("test")
-    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), log)  # type: ignore[arg-type]
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), [], log)  # type: ignore[arg-type]
 
     ship_mock.assert_called_once()
     call_kwargs = ship_mock.call_args
@@ -620,6 +727,7 @@ async def test_resync_sets_tray_uploading(tmp_path: Path, monkeypatch: pytest.Mo
         stop,
         revoked,
         version_blocked,
+        [],
         log,  # type: ignore[arg-type]
     )
     assert "uploading" in tray.states
@@ -650,7 +758,7 @@ async def test_decklist_same_hash_different_mtime_reshipped(
     log = structlog.get_logger("test")
 
     # First ship — registers the file in dedup.
-    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), log)  # type: ignore[arg-type]
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), [], log)  # type: ignore[arg-type]
     assert ship_mock.call_count == 1
     ship_mock.reset_mock()
 
@@ -659,7 +767,7 @@ async def test_decklist_same_hash_different_mtime_reshipped(
     os.utime(sample, (sample.stat().st_atime, sample.stat().st_mtime + 60))
 
     # The is_path_unchanged check should see the mtime difference.
-    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), log)  # type: ignore[arg-type]
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), [], log)  # type: ignore[arg-type]
     assert ship_mock.call_count == 1, "decklist with changed mtime should be re-shipped"
 
     # Verify file_mtime was passed.
@@ -688,7 +796,7 @@ async def test_match_log_same_hash_still_skipped(
     log = structlog.get_logger("test")
 
     # First ship.
-    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), log)  # type: ignore[arg-type]
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), [], log)  # type: ignore[arg-type]
     assert ship_mock.call_count == 1
     ship_mock.reset_mock()
 
@@ -696,7 +804,7 @@ async def test_match_log_same_hash_still_skipped(
     os.utime(sample, (sample.stat().st_atime, sample.stat().st_mtime + 60))
 
     # Match log should still be skipped because hash is the same.
-    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), log)  # type: ignore[arg-type]
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), [], log)  # type: ignore[arg-type]
     assert ship_mock.call_count == 0, "match-log with same hash should be skipped"
 
 
@@ -719,12 +827,12 @@ async def test_decklist_same_hash_same_mtime_skipped(
     log = structlog.get_logger("test")
 
     # First ship.
-    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), log)  # type: ignore[arg-type]
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), [], log)  # type: ignore[arg-type]
     assert ship_mock.call_count == 1
     ship_mock.reset_mock()
 
     # Same file, no mtime change — should be skipped.
-    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), log)  # type: ignore[arg-type]
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), [], log)  # type: ignore[arg-type]
     assert ship_mock.call_count == 0, "unchanged decklist should be skipped"
 
 
@@ -745,7 +853,7 @@ async def test_decklist_ship_includes_file_mtime(
     monkeypatch.setattr(shipper, "ship_file", ship_mock)
 
     log = structlog.get_logger("test")
-    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), log)  # type: ignore[arg-type]
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), [], log)  # type: ignore[arg-type]
 
     ship_mock.assert_called_once()
     call_kwargs = ship_mock.call_args.kwargs
@@ -769,7 +877,7 @@ async def test_match_log_inconclusive_still_ships(
     monkeypatch.setattr(shipper, "ship_file", ship_mock)
 
     log = structlog.get_logger("test")
-    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), log)  # type: ignore[arg-type]
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), [], log)  # type: ignore[arg-type]
 
     ship_mock.assert_called_once()
     kwargs = ship_mock.call_args.kwargs
@@ -793,7 +901,7 @@ async def test_match_log_complete_classification_passed(
     monkeypatch.setattr(shipper, "ship_file", ship_mock)
 
     log = structlog.get_logger("test")
-    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), log)  # type: ignore[arg-type]
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), [], log)  # type: ignore[arg-type]
 
     ship_mock.assert_called_once()
     kwargs = ship_mock.call_args.kwargs
@@ -817,7 +925,7 @@ async def test_decklist_no_agent_classification(
     monkeypatch.setattr(shipper, "ship_file", ship_mock)
 
     log = structlog.get_logger("test")
-    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), log)  # type: ignore[arg-type]
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), [], log)  # type: ignore[arg-type]
 
     ship_mock.assert_called_once()
     kwargs = ship_mock.call_args.kwargs
@@ -841,7 +949,7 @@ async def test_match_log_proper_name_no_file_mtime(
     monkeypatch.setattr(shipper, "ship_file", ship_mock)
 
     log = structlog.get_logger("test")
-    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), log)  # type: ignore[arg-type]
+    await main_mod._handle_file(sample, cfg, dedup, tray, asyncio.Event(), asyncio.Event(), [], log)  # type: ignore[arg-type]
 
     ship_mock.assert_called_once()
     call_kwargs = ship_mock.call_args.kwargs
