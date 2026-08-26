@@ -18,13 +18,11 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel
+
 from . import autostart
 from .config import (
-    AgentSettings,
     AppConfig,
-    LoggingSettings,
-    MTGOSettings,
-    ServerSettings,
     _default_mtgo_log_dir,
     save_config,
 )
@@ -55,6 +53,19 @@ def validate_form(*, url: str, heartbeat_interval: int) -> str | None:
     return None
 
 
+def _updated[M: BaseModel](model: M, **edits: Any) -> M:
+    """Return a copy of ``model`` with only ``edits`` replaced.
+
+    Every field the caller does not name is carried forward untouched, so a
+    field added to a config model later cannot be silently reset on save.
+
+    Note: ``model_copy`` does not re-run validators. Values carried forward
+    were validated when the config was loaded, but a future caller editing a
+    validated field (``stability_seconds``, for one) must validate it here.
+    """
+    return model.model_copy(update=edits)
+
+
 def build_config(
     original: AppConfig,
     *,
@@ -67,27 +78,30 @@ def build_config(
     log_format: str,
     log_stderr: bool,
 ) -> AppConfig:
-    """Build a new ``AppConfig`` from form values, carrying forward unedited fields."""
-    return AppConfig(
-        server=ServerSettings(
+    """Build a new ``AppConfig`` from form values, carrying forward unedited fields.
+
+    Only fields the settings form actually edits are replaced; everything else
+    in ``original`` is copied through verbatim.
+    """
+    return _updated(
+        original,
+        server=_updated(
+            original.server,
             url=normalize_server_url(server_url),
             tls_verify=tls_verify,
         ),
-        agent=AgentSettings(
+        agent=_updated(
+            original.agent,
             machine_name=machine_name.strip(),
-            agent_id=original.agent.agent_id,
-            api_token=original.agent.api_token,
-            registered_at=original.agent.registered_at,
             heartbeat_interval_seconds=heartbeat_interval,
         ),
-        mtgo=MTGOSettings(
+        mtgo=_updated(
+            original.mtgo,
             log_dir=Path(log_dir.strip()) if log_dir.strip() else original.mtgo.log_dir,
-            watched_suffixes=list(original.mtgo.watched_suffixes),
-            stability_seconds=original.mtgo.stability_seconds,
         ),
-        logging=LoggingSettings(
+        logging=_updated(
+            original.logging,
             level=log_level,
-            log_dir=original.logging.log_dir,
             stderr=log_stderr,
             format=log_format,
         ),
