@@ -379,7 +379,7 @@ async def _handle_file(
         path=str(path),
         sha256=sha[:8],
         deduped=result.deduped,
-        file_id=result.file_id,
+        upload_id=result.upload_id,
     )
 
 
