@@ -103,7 +103,11 @@ class TrayIcon:
         with self._state_lock:
             if state == self._state:
                 return
-            if self._paused and state == "idle":
+            # While paused the icon must not claim work is happening.  An
+            # upload that was already in flight when the user paused still
+            # finishes, and its "uploading"/"idle" transitions are ignored so
+            # the tray keeps saying Paused.  Errors still get through.
+            if self._paused and state in ("idle", "uploading"):
                 return
             self._state = state
         if self._icon is None:

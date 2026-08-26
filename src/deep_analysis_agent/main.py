@@ -7,7 +7,8 @@ import contextlib
 import fnmatch
 import sys
 import threading
-from collections.abc import Callable
+import time
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -29,6 +30,12 @@ _STARTUP_BANNER_RULE = "=" * 60
 _HASH_RETRIES = 3
 _HASH_RETRY_DELAY = 2.0
 _DEFERRED_PATHS_WARN = 500  # log a warning when deferred queue exceeds this
+_UPLOAD_QUEUE_WARN = 500  # log a warning when the pending upload queue reaches this
+# A queued path is re-checked at dequeue time.  If it changed while it waited
+# behind a slow upload it goes back on the queue after this delay instead of
+# blocking the worker, and is given up on after this many attempts.
+_REVALIDATE_DELAY = 5.0
+_MAX_REVALIDATIONS = 3
 
 # Mapping of filename glob patterns to server content_type values.
 _CONTENT_TYPE_MAP: list[tuple[str, str]] = [
@@ -247,13 +254,17 @@ async def _drain_deferred(
     """Process all paths that were deferred during a version block."""
     if not deferred_paths:
         return
+    if tray._paused:
+        # Pause means pause.  The paths stay deferred and drain on resume.
+        log.info("drain_deferred_paused", pending=len(deferred_paths))
+        return
     batch = list(deferred_paths)
     deferred_paths.clear()
     log.info("draining_deferred_paths", count=len(batch))
-    for p in batch:
-        if version_blocked.is_set() or revoked_event.is_set():
-            # Re-blocked mid-drain — put remaining paths back.
-            deferred_paths.extend(batch[batch.index(p) :])
+    for i, p in enumerate(batch):
+        if version_blocked.is_set() or revoked_event.is_set() or tray._paused:
+            # Re-blocked or paused mid-drain: put the remaining paths back.
+            deferred_paths.extend(batch[i:])
             log.info("drain_interrupted", remaining=len(deferred_paths))
             return
         await _handle_file(
@@ -499,6 +510,204 @@ def _schedule_tray_notification(
     threading.Thread(target=_notify, name="startup-notify", daemon=True).start()
 
 
+def log_worker_exit(
+    task: asyncio.Task[None],
+    tray: TrayIcon,
+    log: structlog.stdlib.BoundLogger,
+) -> None:
+    """Surface an upload worker that died, instead of silently stopping uploads.
+
+    The worker is the only path from the watcher to the server, so a
+    ``BaseException`` escaping it (which its own ``except Exception`` cannot
+    catch) would otherwise leave the agent enqueueing files forever with
+    nothing draining them and nothing said about it.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is None:
+        log.error("upload_worker_exited — uploads have stopped")
+    else:
+        log.error("upload_worker_died — uploads have stopped", error=repr(exc))
+    with contextlib.suppress(Exception):
+        tray.set_state("error")
+
+
+def make_enqueuer(
+    loop: asyncio.AbstractEventLoop,
+    upload_queue: asyncio.Queue[Path],
+    log: structlog.stdlib.BoundLogger,
+) -> Callable[[Path], None]:
+    """Build the watcher callback that hands a ready file to the upload worker.
+
+    The watcher runs a single worker thread.  The callback must therefore
+    return immediately: it only puts the path on the loop's upload queue and
+    never waits for the upload to finish.  Waiting here (as the old
+    ``fut.result(timeout=...)`` did) both stalled the next file behind a slow
+    upload and reported a still-running upload as a failure once the wait
+    expired.  Completion and errors are reported by :func:`upload_worker`.
+    """
+
+    def _put(path: Path) -> None:
+        upload_queue.put_nowait(path)
+        if upload_queue.qsize() == _UPLOAD_QUEUE_WARN:
+            log.warning("upload_queue_high", pending=upload_queue.qsize())
+
+    def on_file_ready(path: Path) -> None:
+        try:
+            loop.call_soon_threadsafe(_put, path)
+        except RuntimeError:
+            # Loop is shutting down; the file is picked up on next startup scan.
+            log.warning("upload_enqueue_dropped_loop_closed", path=str(path))
+
+    return on_file_ready
+
+
+def dequeue_readiness(path: Path, stability_seconds: float) -> str:
+    """Re-check a queued path just before it is shipped.
+
+    The watcher only enqueues a file once its size and mtime have been quiet
+    for ``stability_seconds``, so at enqueue time the file's mtime is always
+    at least that old.  While the path waits behind a slow upload it can be
+    written again, and the queue entry says nothing about that.  A single
+    ``stat`` at dequeue time re-applies the same wall-clock rule the watcher
+    uses, so a file that was touched again is never hashed and shipped
+    mid-write.
+
+    Returns ``"ready"``, ``"gone"`` (deleted or unreadable) or ``"unstable"``.
+    """
+    try:
+        st = path.stat()
+    except OSError:
+        return "gone"
+    if time.time() - st.st_mtime >= stability_seconds:
+        return "ready"
+    return "unstable"
+
+
+async def upload_worker(
+    upload_queue: asyncio.Queue[Path],
+    handle: Callable[[Path], Awaitable[None]],
+    tray: TrayIcon,
+    log: structlog.stdlib.BoundLogger,
+    resume_event: asyncio.Event | None = None,
+    stability_seconds: float | None = None,
+) -> None:
+    """Drain the upload queue one file at a time, reporting real failures.
+
+    Serial by design, and that is a correctness invariant rather than a style
+    choice: the watcher can enqueue the same path twice before the first
+    upload finishes, and it is the one-at-a-time ordering that lets
+    ``_handle_file``'s dedup check catch the second copy.  Uploads also stay
+    in submission order and the tray reflects one file at a time, exactly as
+    when the watcher thread blocked.  The difference is that the watcher
+    thread is now free while this runs, and a slow upload is simply slow,
+    never reported as failed.
+
+    ``resume_event`` is the pause gate: set means uploads may proceed, clear
+    means the user chose Pause Sync.  It is only ever tested between files, so
+    a request already in flight finishes, and nothing else starts until the
+    user resumes.  A file taken off the queue in the instant a pause landed is
+    held in hand rather than shipped or dropped.
+
+    ``stability_seconds`` enables the dequeue-time re-check described in
+    :func:`dequeue_readiness`.  Both are optional so the worker can be
+    exercised with paths that never touch the disk.
+    """
+    held: Path | None = None
+    # A held item has not been disposed of yet, so its task_done() travels
+    # with it instead of being paid at hold time.
+    held_owes_task_done = False
+    revalidations: dict[str, int] = {}
+    requeues: set[asyncio.Task[None]] = set()
+
+    def _pending() -> int:
+        return upload_queue.qsize() + (1 if held is not None else 0)
+
+    def _paused() -> bool:
+        return resume_event is not None and not resume_event.is_set()
+
+    def _requeue_later(path: Path) -> None:
+        """Put a still-changing path back after a delay, without blocking."""
+
+        async def _later() -> None:
+            await asyncio.sleep(_REVALIDATE_DELAY)
+            upload_queue.put_nowait(path)
+
+        task = asyncio.create_task(_later(), name="upload-requeue")
+        requeues.add(task)
+        task.add_done_callback(requeues.discard)
+
+    try:
+        while True:
+            if _paused():
+                log.info("upload_worker_paused", pending=_pending())
+                assert resume_event is not None
+                await resume_event.wait()
+                log.info("upload_worker_resumed", pending=_pending())
+
+            if held is not None:
+                path, from_queue = held, held_owes_task_done
+                held = None
+                held_owes_task_done = False
+            else:
+                path, from_queue = await upload_queue.get(), True
+
+            try:
+                if _paused():
+                    # The pause landed while we were waiting for work.  Hold
+                    # the file: it ships on resume and is never lost, and it
+                    # is only ever handed to ``handle`` once.
+                    held = path
+                    held_owes_task_done = from_queue
+                    from_queue = False
+                    log.info("upload_held_paused", path=str(path))
+                    continue
+
+                if stability_seconds is not None:
+                    state = dequeue_readiness(path, stability_seconds)
+                    if state == "gone":
+                        revalidations.pop(str(path), None)
+                        log.info("skip_vanished_before_upload", path=str(path))
+                        continue
+                    if state == "unstable":
+                        tries = revalidations.get(str(path), 0) + 1
+                        if tries > _MAX_REVALIDATIONS:
+                            # Bounded on purpose: a file still being written
+                            # after this many tries belongs to the watcher's
+                            # stability gate, which will re-enqueue it once it
+                            # settles.  Retrying here forever would be a
+                            # livelock on a file that never stops changing.
+                            revalidations.pop(str(path), None)
+                            log.warning(
+                                "upload_dropped_still_changing",
+                                path=str(path),
+                                attempts=tries - 1,
+                            )
+                            continue
+                        revalidations[str(path)] = tries
+                        log.info("upload_deferred_unstable", path=str(path), attempt=tries)
+                        _requeue_later(path)
+                        continue
+                    revalidations.pop(str(path), None)
+
+                await handle(path)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # _handle_file already reports ShipError itself; anything reaching
+                # here is unexpected, so surface it on both log and tray.
+                log.exception("handle_file_raised", path=str(path))
+                with contextlib.suppress(Exception):
+                    tray.set_state("error")
+            finally:
+                if from_queue:
+                    upload_queue.task_done()
+    finally:
+        for task in requeues:
+            task.cancel()
+
+
 async def _async_main() -> int:
     config = load_config()
     configure_logging(config)
@@ -526,6 +735,9 @@ async def _async_main() -> int:
 
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
+    # Set = uploads may proceed, clear = the user chose Pause Sync.
+    resume_event = asyncio.Event()
+    resume_event.set()
     revoked_event = asyncio.Event()
     version_blocked = asyncio.Event()
     deferred_paths: list[Path] = []
@@ -539,24 +751,20 @@ async def _async_main() -> int:
             save_config(config)
             log.warning("reregister_requested — restart agent to complete")
 
-        def on_file_ready(path: Path) -> None:
-            fut = asyncio.run_coroutine_threadsafe(
-                _handle_file(
-                    path,
-                    config,
-                    dedup,
-                    tray,
-                    revoked_event,
-                    version_blocked,
-                    deferred_paths,
-                    log,
-                ),
-                loop,
+        upload_queue: asyncio.Queue[Path] = asyncio.Queue()
+        on_file_ready = make_enqueuer(loop, upload_queue, log)
+
+        async def _handle_one(path: Path) -> None:
+            await _handle_file(
+                path,
+                config,
+                dedup,
+                tray,
+                revoked_event,
+                version_blocked,
+                deferred_paths,
+                log,
             )
-            try:
-                fut.result(timeout=300)
-            except Exception:
-                log.exception("handle_file_raised", path=str(path))
 
         # Mutable container so on_reload can swap the active watcher in place.
         watcher_box: list[LogWatcher | None] = [None]
@@ -591,6 +799,12 @@ async def _async_main() -> int:
                 tray.set_state("idle")
 
         def _on_pause(paused: bool) -> None:
+            # Called on the tray thread, so the loop-owned gate is flipped
+            # through the loop.  Do it first: stopping the watcher only stops
+            # NEW files being detected, and on its own would let an existing
+            # backlog keep uploading straight through the pause.
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(resume_event.clear if paused else resume_event.set)
             if paused:
                 current = watcher_box[0]
                 if current is not None:
@@ -627,6 +841,19 @@ async def _async_main() -> int:
                 log_dir=str(config.mtgo.log_dir),
             )
             tray.set_state("watcher_disabled")
+
+        upload_task = asyncio.create_task(
+            upload_worker(
+                upload_queue,
+                _handle_one,
+                tray,
+                log,
+                resume_event,
+                config.mtgo.stability_seconds,
+            ),
+            name="upload-worker",
+        )
+        upload_task.add_done_callback(lambda t: log_worker_exit(t, tray, log))
 
         # Ship CardDataSource reference data if changed (non-blocking).
         cds_task = asyncio.create_task(
@@ -691,10 +918,14 @@ async def _async_main() -> int:
             await asyncio.sleep(0.2)
 
         stop_event.set()
+        pending_uploads = upload_queue.qsize()
+        if pending_uploads:
+            log.info("upload_queue_abandoned_on_quit", pending=pending_uploads)
         cds_task.cancel()
         hb_task.cancel()
         rev_task.cancel()
-        for t in (cds_task, hb_task, rev_task):
+        upload_task.cancel()
+        for t in (cds_task, hb_task, rev_task, upload_task):
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await t
         return 0
