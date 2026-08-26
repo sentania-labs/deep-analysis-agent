@@ -6,6 +6,8 @@ No real network. shipper.ship_file is mocked via AsyncMock.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import threading
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -1270,3 +1272,203 @@ def test_schedule_tray_notification_calls_notify_when_icon_present() -> None:
     time.sleep(0.2)
     assert len(notified) == 1
     assert notified[0] == ("test msg", "Test")
+
+
+# --- Upload queue worker: slow uploads are not failures (issue #39) ---
+
+
+class _RecordingLog:
+    """Minimal structlog-shaped logger that records what was emitted."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, str]] = []
+
+    def _record(self, level: str, event: str, **_kw: object) -> None:
+        self.events.append((level, event))
+
+    def info(self, event: str, **kw: object) -> None:
+        self._record("info", event, **kw)
+
+    def debug(self, event: str, **kw: object) -> None:
+        self._record("debug", event, **kw)
+
+    def warning(self, event: str, **kw: object) -> None:
+        self._record("warning", event, **kw)
+
+    def error(self, event: str, **kw: object) -> None:
+        self._record("error", event, **kw)
+
+    def exception(self, event: str, **kw: object) -> None:
+        self._record("exception", event, **kw)
+
+    def names(self) -> list[str]:
+        return [e for _, e in self.events]
+
+
+async def test_slow_upload_is_not_reported_as_failure() -> None:
+    """A slow _handle_file must never be logged as a failure while it runs."""
+    q: asyncio.Queue[Path] = asyncio.Queue()
+    log = _RecordingLog()
+    tray = _StubTray()
+    release = asyncio.Event()
+    finished: list[Path] = []
+
+    async def handle(path: Path) -> None:
+        await release.wait()
+        finished.append(path)
+
+    worker = asyncio.create_task(
+        main_mod.upload_worker(q, handle, tray, log)  # type: ignore[arg-type]
+    )
+    q.put_nowait(Path("slow.dat"))
+
+    # Let the worker pick the file up and sit on the slow handler.
+    for _ in range(20):
+        await asyncio.sleep(0.01)
+    assert not finished, "handler should still be in flight"
+    assert "handle_file_raised" not in log.names()
+    assert "error" not in tray.states
+
+    release.set()
+    await asyncio.wait_for(q.join(), timeout=5)
+    worker.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await worker
+
+    assert finished == [Path("slow.dat")]
+    assert "handle_file_raised" not in log.names()
+    assert "error" not in tray.states
+
+
+async def test_failed_upload_is_reported_and_worker_continues() -> None:
+    """A genuine failure reaches the log and the tray, and does not kill the worker."""
+    q: asyncio.Queue[Path] = asyncio.Queue()
+    log = _RecordingLog()
+    tray = _StubTray()
+    handled: list[Path] = []
+
+    async def handle(path: Path) -> None:
+        handled.append(path)
+        if path.name == "bad.dat":
+            raise RuntimeError("boom")
+
+    worker = asyncio.create_task(
+        main_mod.upload_worker(q, handle, tray, log)  # type: ignore[arg-type]
+    )
+    q.put_nowait(Path("bad.dat"))
+    q.put_nowait(Path("good.dat"))
+    await asyncio.wait_for(q.join(), timeout=5)
+    worker.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await worker
+
+    assert "handle_file_raised" in log.names()
+    assert tray.states == ["error"]
+    # The failure did not stop the queue.
+    assert handled == [Path("bad.dat"), Path("good.dat")]
+
+
+async def test_slow_file_does_not_block_the_next_file() -> None:
+    """Enqueueing from the watcher thread returns at once while an upload runs."""
+    import time
+
+    loop = asyncio.get_running_loop()
+    q: asyncio.Queue[Path] = asyncio.Queue()
+    log = _RecordingLog()
+    tray = _StubTray()
+    release = asyncio.Event()
+    handled: list[Path] = []
+
+    async def handle(path: Path) -> None:
+        if path.name == "slow.dat":
+            await release.wait()
+        handled.append(path)
+
+    worker = asyncio.create_task(
+        main_mod.upload_worker(q, handle, tray, log)  # type: ignore[arg-type]
+    )
+    on_file_ready = main_mod.make_enqueuer(loop, q, log)  # type: ignore[arg-type]
+
+    elapsed: list[float] = []
+
+    def watcher_thread() -> None:
+        # Mirrors the watcher's single worker thread: two files back to back.
+        for name in ("slow.dat", "next.dat"):
+            start = time.monotonic()
+            on_file_ready(Path(name))
+            elapsed.append(time.monotonic() - start)
+
+    t = threading.Thread(target=watcher_thread, name="fake-watcher")
+    t.start()
+    await asyncio.to_thread(t.join)
+    # Let the queued call_soon_threadsafe callbacks land and the worker pick
+    # up the first file.
+    for _ in range(20):
+        await asyncio.sleep(0.01)
+
+    # The watcher thread got both files queued while the first is still uploading.
+    assert len(elapsed) == 2
+    assert max(elapsed) < 1.0
+    assert not handled, "slow upload should still be in flight"
+    assert q.qsize() == 1, "second file waits in the queue, not on the watcher thread"
+
+    release.set()
+    await asyncio.wait_for(q.join(), timeout=5)
+    worker.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await worker
+
+    assert handled == [Path("slow.dat"), Path("next.dat")]
+    assert "handle_file_raised" not in log.names()
+
+
+def test_enqueue_on_closed_loop_is_logged_not_raised() -> None:
+    """Enqueueing after the loop is gone warns instead of raising into the watcher."""
+    closed_loop = asyncio.new_event_loop()
+    closed_loop.close()
+    q: asyncio.Queue[Path] = asyncio.Queue()
+    log = _RecordingLog()
+
+    on_file_ready = main_mod.make_enqueuer(closed_loop, q, log)  # type: ignore[arg-type]
+    on_file_ready(Path("late.dat"))
+
+    assert "upload_enqueue_dropped_loop_closed" in log.names()
+
+
+async def test_dead_upload_worker_is_reported() -> None:
+    """A worker that dies must say so instead of silently stopping uploads."""
+    log = _RecordingLog()
+    tray = _StubTray()
+
+    async def boom() -> None:
+        raise BaseException("fatal")  # noqa: TRY002 — the case except Exception misses
+
+    task: asyncio.Task[None] = asyncio.ensure_future(boom())  # type: ignore[arg-type]
+    with contextlib.suppress(BaseException):
+        await task
+    main_mod.log_worker_exit(task, tray, log)  # type: ignore[arg-type]
+
+    assert "upload_worker_died — uploads have stopped" in log.names()
+    assert tray.states == ["error"]
+
+
+async def test_worker_exit_callback_silent_on_cancel() -> None:
+    """Normal shutdown cancellation is not reported as a worker death."""
+    log = _RecordingLog()
+    tray = _StubTray()
+    q: asyncio.Queue[Path] = asyncio.Queue()
+
+    async def handle(path: Path) -> None:  # pragma: no cover — never called
+        return None
+
+    task = asyncio.create_task(
+        main_mod.upload_worker(q, handle, tray, log)  # type: ignore[arg-type]
+    )
+    await asyncio.sleep(0)
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+    main_mod.log_worker_exit(task, tray, log)  # type: ignore[arg-type]
+
+    assert log.names() == []
+    assert tray.states == []

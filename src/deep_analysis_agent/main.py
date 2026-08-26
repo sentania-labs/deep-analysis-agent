@@ -7,7 +7,7 @@ import contextlib
 import fnmatch
 import sys
 import threading
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -29,6 +29,7 @@ _STARTUP_BANNER_RULE = "=" * 60
 _HASH_RETRIES = 3
 _HASH_RETRY_DELAY = 2.0
 _DEFERRED_PATHS_WARN = 500  # log a warning when deferred queue exceeds this
+_UPLOAD_QUEUE_WARN = 500  # log a warning when the pending upload queue reaches this
 
 # Mapping of filename glob patterns to server content_type values.
 _CONTENT_TYPE_MAP: list[tuple[str, str]] = [
@@ -499,6 +500,92 @@ def _schedule_tray_notification(
     threading.Thread(target=_notify, name="startup-notify", daemon=True).start()
 
 
+def log_worker_exit(
+    task: asyncio.Task[None],
+    tray: TrayIcon,
+    log: structlog.stdlib.BoundLogger,
+) -> None:
+    """Surface an upload worker that died, instead of silently stopping uploads.
+
+    The worker is the only path from the watcher to the server, so a
+    ``BaseException`` escaping it (which its own ``except Exception`` cannot
+    catch) would otherwise leave the agent enqueueing files forever with
+    nothing draining them and nothing said about it.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is None:
+        log.error("upload_worker_exited — uploads have stopped")
+    else:
+        log.error("upload_worker_died — uploads have stopped", error=repr(exc))
+    with contextlib.suppress(Exception):
+        tray.set_state("error")
+
+
+def make_enqueuer(
+    loop: asyncio.AbstractEventLoop,
+    upload_queue: asyncio.Queue[Path],
+    log: structlog.stdlib.BoundLogger,
+) -> Callable[[Path], None]:
+    """Build the watcher callback that hands a ready file to the upload worker.
+
+    The watcher runs a single worker thread.  The callback must therefore
+    return immediately: it only puts the path on the loop's upload queue and
+    never waits for the upload to finish.  Waiting here (as the old
+    ``fut.result(timeout=...)`` did) both stalled the next file behind a slow
+    upload and reported a still-running upload as a failure once the wait
+    expired.  Completion and errors are reported by :func:`upload_worker`.
+    """
+
+    def _put(path: Path) -> None:
+        upload_queue.put_nowait(path)
+        if upload_queue.qsize() == _UPLOAD_QUEUE_WARN:
+            log.warning("upload_queue_high", pending=upload_queue.qsize())
+
+    def on_file_ready(path: Path) -> None:
+        try:
+            loop.call_soon_threadsafe(_put, path)
+        except RuntimeError:
+            # Loop is shutting down; the file is picked up on next startup scan.
+            log.warning("upload_enqueue_dropped_loop_closed", path=str(path))
+
+    return on_file_ready
+
+
+async def upload_worker(
+    upload_queue: asyncio.Queue[Path],
+    handle: Callable[[Path], Awaitable[None]],
+    tray: TrayIcon,
+    log: structlog.stdlib.BoundLogger,
+) -> None:
+    """Drain the upload queue one file at a time, reporting real failures.
+
+    Serial by design, and that is a correctness invariant rather than a style
+    choice: the watcher can enqueue the same path twice before the first
+    upload finishes, and it is the one-at-a-time ordering that lets
+    ``_handle_file``'s dedup check catch the second copy.  Uploads also stay
+    in submission order and the tray reflects one file at a time, exactly as
+    when the watcher thread blocked.  The difference is that the watcher
+    thread is now free while this runs, and a slow upload is simply slow,
+    never reported as failed.
+    """
+    while True:
+        path = await upload_queue.get()
+        try:
+            await handle(path)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # _handle_file already reports ShipError itself; anything reaching
+            # here is unexpected, so surface it on both log and tray.
+            log.exception("handle_file_raised", path=str(path))
+            with contextlib.suppress(Exception):
+                tray.set_state("error")
+        finally:
+            upload_queue.task_done()
+
+
 async def _async_main() -> int:
     config = load_config()
     configure_logging(config)
@@ -539,24 +626,20 @@ async def _async_main() -> int:
             save_config(config)
             log.warning("reregister_requested — restart agent to complete")
 
-        def on_file_ready(path: Path) -> None:
-            fut = asyncio.run_coroutine_threadsafe(
-                _handle_file(
-                    path,
-                    config,
-                    dedup,
-                    tray,
-                    revoked_event,
-                    version_blocked,
-                    deferred_paths,
-                    log,
-                ),
-                loop,
+        upload_queue: asyncio.Queue[Path] = asyncio.Queue()
+        on_file_ready = make_enqueuer(loop, upload_queue, log)
+
+        async def _handle_one(path: Path) -> None:
+            await _handle_file(
+                path,
+                config,
+                dedup,
+                tray,
+                revoked_event,
+                version_blocked,
+                deferred_paths,
+                log,
             )
-            try:
-                fut.result(timeout=300)
-            except Exception:
-                log.exception("handle_file_raised", path=str(path))
 
         # Mutable container so on_reload can swap the active watcher in place.
         watcher_box: list[LogWatcher | None] = [None]
@@ -628,6 +711,12 @@ async def _async_main() -> int:
             )
             tray.set_state("watcher_disabled")
 
+        upload_task = asyncio.create_task(
+            upload_worker(upload_queue, _handle_one, tray, log),
+            name="upload-worker",
+        )
+        upload_task.add_done_callback(lambda t: log_worker_exit(t, tray, log))
+
         # Ship CardDataSource reference data if changed (non-blocking).
         cds_task = asyncio.create_task(
             card_data_source.check_and_ship(config, dedup),
@@ -691,10 +780,14 @@ async def _async_main() -> int:
             await asyncio.sleep(0.2)
 
         stop_event.set()
+        pending_uploads = upload_queue.qsize()
+        if pending_uploads:
+            log.info("upload_queue_abandoned_on_quit", pending=pending_uploads)
         cds_task.cancel()
         hb_task.cancel()
         rev_task.cancel()
-        for t in (cds_task, hb_task, rev_task):
+        upload_task.cancel()
+        for t in (cds_task, hb_task, rev_task, upload_task):
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await t
         return 0
