@@ -276,14 +276,22 @@ class TrayIcon:
         def _run() -> None:
             result = check_for_update(self._version)
             logger.info("update_check_done available=%s msg=%s", result.available, result.message)
+            msg = result.message
             if result.available:
                 from .updater import apply_update
 
-                apply_update()
+                applied = apply_update()
+                logger.info(
+                    "update_apply_done started=%s reason=%s update_exe=%s",
+                    applied.started,
+                    applied.reason,
+                    applied.update_exe,
+                )
+                if not applied.started:
+                    msg = f"Update could not be started. {applied.detail}"
             if self._icon is not None:
                 try:
-                    msg = result.message[:256] if len(result.message) > 256 else result.message
-                    self._icon.notify(msg, "Deep Analysis")
+                    self._icon.notify(msg[:256], "Deep Analysis")
                 except Exception:
                     logger.exception("tray notify failed")
 
