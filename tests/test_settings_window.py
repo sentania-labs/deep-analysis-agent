@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -115,6 +116,142 @@ def test_build_config_carries_forward_secrets_and_unedited_fields() -> None:
     assert new.mtgo.watched_suffixes == [".dat", ".log", ".csv"]
     assert new.mtgo.stability_seconds == 750.0
     assert new.logging.log_dir == Path("/var/log/da-custom")
+
+
+def _isolate_config_sources(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Point config discovery at an empty tmp dir and drop env overrides.
+
+    Without this, ``AppConfig()`` picks up a real ``config.toml`` and any
+    ``DEEP_ANALYSIS_*`` env vars, so the default-vs-real-value comparisons
+    below would reflect the machine rather than the schema.
+    """
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    for name in list(os.environ):
+        if name.startswith("DEEP_ANALYSIS_"):
+            monkeypatch.delenv(name, raising=False)
+
+
+def _fully_populated_config() -> AppConfig:
+    """An AppConfig where every field holds a distinctive non-default value."""
+    cfg = AppConfig()
+
+    cfg.server.url = "https://old.example"
+    cfg.server.tls_verify = "/etc/ssl/custom-ca.pem"
+
+    cfg.agent.machine_name = "old-bench"
+    cfg.agent.agent_id = "ag-full"
+    cfg.agent.api_token = "tok-full"
+    cfg.agent.registered_at = datetime(2026, 2, 3, 4, 5, 6)
+    cfg.agent.heartbeat_interval_seconds = 999
+
+    cfg.mtgo.log_dir = Path("/old/mtgo/logs")
+    cfg.mtgo.watched_suffixes = [".dat", ".xml", ".csv"]
+    cfg.mtgo.watched_name_globs = ["Match_GameLog_*.dat"]
+    cfg.mtgo.stability_seconds = 900.0
+    cfg.mtgo.card_data_source_dir = Path("/old/card/data")
+    cfg.mtgo.card_data_source_enabled = False
+
+    cfg.logging.level = "ERROR"
+    cfg.logging.log_dir = Path("/var/log/da-full")
+    cfg.logging.stderr = False
+    cfg.logging.format = "json"
+
+    return cfg
+
+
+def _save_with_unrelated_edit(original: AppConfig) -> AppConfig:
+    """Save the settings form changing only the machine name."""
+    return build_config(
+        original,
+        server_url=original.server.url,
+        tls_verify=bool(original.server.tls_verify),
+        machine_name="renamed-bench",
+        heartbeat_interval=original.agent.heartbeat_interval_seconds,
+        log_dir=str(original.mtgo.log_dir),
+        log_level=original.logging.level,
+        log_format=original.logging.format,
+        log_stderr=original.logging.stderr,
+    )
+
+
+def test_build_config_preserves_watched_globs_and_card_data_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for #38: fields with no UI must survive an unrelated save."""
+    _isolate_config_sources(monkeypatch, tmp_path)
+    original = _fully_populated_config()
+
+    new = _save_with_unrelated_edit(original)
+
+    assert new.agent.machine_name == "renamed-bench"
+    assert new.mtgo.watched_name_globs == ["Match_GameLog_*.dat"]
+    assert new.mtgo.card_data_source_dir == Path("/old/card/data")
+    assert new.mtgo.card_data_source_enabled is False
+
+
+# Dotted paths the settings form is allowed to change. Everything else must
+# round-trip through build_config untouched.
+EDITABLE_PATHS = frozenset(
+    {
+        "server.url",
+        "server.tls_verify",
+        "agent.machine_name",
+        "agent.heartbeat_interval_seconds",
+        "mtgo.log_dir",
+        "logging.level",
+        "logging.stderr",
+        "logging.format",
+    }
+)
+
+
+def test_build_config_preserves_every_unedited_field(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Guard: any field build_config drops shows up here, named.
+
+    This walks the whole model rather than a hand-written field list, so a
+    field added to MTGOSettings (or any other section) later is covered
+    automatically instead of silently resetting on save.
+    """
+    _isolate_config_sources(monkeypatch, tmp_path)
+    original = _fully_populated_config()
+
+    new = _save_with_unrelated_edit(original)
+
+    before = original.model_dump()
+    after = new.model_dump()
+    dropped = {
+        f"{section}.{field}": (value, after[section][field])
+        for section, fields in before.items()
+        for field, value in fields.items()
+        if f"{section}.{field}" not in EDITABLE_PATHS and after[section][field] != value
+    }
+    assert dropped == {}
+
+
+def test_build_config_guard_covers_all_config_fields(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Guard: a new config field must be populated in _fully_populated_config.
+
+    Without this, adding a field would leave the preservation test comparing
+    default against default and passing vacuously.
+    """
+    _isolate_config_sources(monkeypatch, tmp_path)
+    populated = _fully_populated_config()
+    defaults = AppConfig()
+
+    unpopulated = [
+        f"{section}.{field}"
+        for section, fields in populated.model_dump().items()
+        for field, value in fields.items()
+        if defaults.model_dump()[section][field] == value
+    ]
+    assert unpopulated == []
 
 
 def test_settings_window_constructs_without_starting_thread() -> None:
