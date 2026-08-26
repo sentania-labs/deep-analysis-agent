@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import threading
+import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -1472,3 +1473,403 @@ async def test_worker_exit_callback_silent_on_cancel() -> None:
 
     assert log.names() == []
     assert tray.states == []
+
+
+# --- Pause Sync actually pauses the backlog (Codex P1 on PR #52) ---
+
+
+async def _settle(ticks: int = 20) -> None:
+    """Give the loop enough turns for the worker to act (or prove it did not)."""
+    for _ in range(ticks):
+        await asyncio.sleep(0.01)
+
+
+async def test_pause_stops_draining_the_queued_backlog() -> None:
+    """Pausing mid-upload lets the in-flight file finish and ships nothing else."""
+    q: asyncio.Queue[Path] = asyncio.Queue()
+    log = _RecordingLog()
+    tray = _StubTray()
+    resume = asyncio.Event()
+    resume.set()
+    release = asyncio.Event()
+    handled: list[Path] = []
+
+    async def handle(path: Path) -> None:
+        if path.name == "inflight.dat":
+            await release.wait()
+        handled.append(path)
+
+    worker = asyncio.create_task(
+        main_mod.upload_worker(q, handle, tray, log, resume)  # type: ignore[arg-type]
+    )
+    for name in ("inflight.dat", "queued1.dat", "queued2.dat"):
+        q.put_nowait(Path(name))
+    await _settle()
+    assert not handled, "first file should still be in flight"
+
+    # User hits Pause Sync while the backlog is sitting behind the slow upload.
+    resume.clear()
+    release.set()
+    await _settle(50)
+
+    assert handled == [Path("inflight.dat")], "only the in-flight file may complete"
+    assert q.qsize() == 2, "the backlog stays queued, not dropped"
+    assert "upload_worker_paused" in log.names()
+
+    worker.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await worker
+
+
+async def test_resume_ships_the_backlog_exactly_once() -> None:
+    """Unpausing drains the held backlog, with no file handled twice."""
+    q: asyncio.Queue[Path] = asyncio.Queue()
+    log = _RecordingLog()
+    tray = _StubTray()
+    resume = asyncio.Event()
+    resume.set()
+    release = asyncio.Event()
+    handled: list[Path] = []
+
+    async def handle(path: Path) -> None:
+        if path.name == "inflight.dat":
+            await release.wait()
+        handled.append(path)
+
+    worker = asyncio.create_task(
+        main_mod.upload_worker(q, handle, tray, log, resume)  # type: ignore[arg-type]
+    )
+    for name in ("inflight.dat", "queued1.dat", "queued2.dat"):
+        q.put_nowait(Path(name))
+    await _settle()
+    resume.clear()
+    release.set()
+    await _settle(50)
+    assert handled == [Path("inflight.dat")]
+
+    resume.set()
+    await asyncio.wait_for(q.join(), timeout=5)
+    await _settle()
+
+    assert handled == [Path("inflight.dat"), Path("queued1.dat"), Path("queued2.dat")]
+    assert len(handled) == len(set(handled)), "no file may be handled twice"
+    assert "upload_worker_resumed" in log.names()
+
+    worker.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await worker
+
+
+async def test_file_arriving_during_pause_is_held_not_shipped() -> None:
+    """A path that lands while the worker waits on get() is held, not shipped."""
+    q: asyncio.Queue[Path] = asyncio.Queue()
+    log = _RecordingLog()
+    tray = _StubTray()
+    resume = asyncio.Event()
+    resume.set()
+    handled: list[Path] = []
+
+    async def handle(path: Path) -> None:
+        handled.append(path)
+
+    worker = asyncio.create_task(
+        main_mod.upload_worker(q, handle, tray, log, resume)  # type: ignore[arg-type]
+    )
+    # Worker is parked on an empty queue; pause, then a late requeue arrives.
+    await _settle(5)
+    resume.clear()
+    q.put_nowait(Path("late.dat"))
+    await _settle(50)
+
+    assert handled == [], "nothing may ship while paused"
+    assert "upload_held_paused" in log.names()
+
+    resume.set()
+    await _settle(50)
+    assert handled == [Path("late.dat")], "the held file ships once on resume"
+
+    worker.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await worker
+
+
+def test_paused_tray_ignores_uploading_and_idle() -> None:
+    """A paused tray must not flip back to uploading or idle behind the user."""
+    from deep_analysis_agent import tray as tray_mod
+
+    icon = tray_mod.TrayIcon(config=AppConfig(), version="0.0.0-test")
+    icon._paused = True
+    icon.set_state("paused")
+    icon.set_state("uploading")
+    assert icon._state == "paused"
+    icon.set_state("idle")
+    assert icon._state == "paused"
+    # Errors are still allowed to surface.
+    icon.set_state("error")
+    assert icon._state == "error"
+
+
+# --- Stale queue entries are revalidated at dequeue (Codex P2 on PR #52) ---
+
+
+def _age(path: Path, seconds: float) -> None:
+    """Backdate a file's mtime so it reads as settled."""
+    import os
+
+    stamp = time.time() - seconds
+    os.utime(path, (stamp, stamp))
+
+
+def test_dequeue_readiness_states(tmp_path: Path) -> None:
+    settled = tmp_path / "settled.dat"
+    settled.write_bytes(b"done")
+    _age(settled, 120)
+    assert main_mod.dequeue_readiness(settled, 60) == "ready"
+
+    fresh = tmp_path / "fresh.dat"
+    fresh.write_bytes(b"still writing")
+    assert main_mod.dequeue_readiness(fresh, 60) == "unstable"
+
+    assert main_mod.dequeue_readiness(tmp_path / "nope.dat", 60) == "gone"
+
+
+async def test_file_modified_after_queueing_is_not_shipped_stale(tmp_path: Path) -> None:
+    """A queue entry whose file changed while it waited must not be shipped."""
+    q: asyncio.Queue[Path] = asyncio.Queue()
+    log = _RecordingLog()
+    tray = _StubTray()
+    handled: list[Path] = []
+
+    stale = tmp_path / "decklist.xml"
+    stale.write_bytes(b"v1")
+    _age(stale, 300)
+    good = tmp_path / "match.dat"
+    good.write_bytes(b"payload")
+    _age(good, 300)
+
+    async def handle(path: Path) -> None:
+        handled.append(path)
+
+    worker = asyncio.create_task(
+        main_mod.upload_worker(q, handle, tray, log, None, 60.0)  # type: ignore[arg-type]
+    )
+    q.put_nowait(stale)
+    q.put_nowait(good)
+    # The user edits the decklist while it sits in the queue.
+    stale.write_bytes(b"v2 half writ")
+
+    await asyncio.wait_for(q.join(), timeout=5)
+    await _settle()
+
+    assert handled == [good], "the modified file must not ship in its stale state"
+    assert "upload_deferred_unstable" in log.names()
+
+    worker.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await worker
+
+
+async def test_unstable_file_requeue_is_bounded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file that never settles is given up on instead of looping forever."""
+    monkeypatch.setattr(main_mod, "_REVALIDATE_DELAY", 0.01)
+    q: asyncio.Queue[Path] = asyncio.Queue()
+    log = _RecordingLog()
+    tray = _StubTray()
+    handled: list[Path] = []
+
+    churning = tmp_path / "churn.dat"
+    churning.write_bytes(b"x")
+
+    async def handle(path: Path) -> None:  # pragma: no cover, must never run
+        handled.append(path)
+
+    worker = asyncio.create_task(
+        main_mod.upload_worker(q, handle, tray, log, None, 60.0)  # type: ignore[arg-type]
+    )
+    q.put_nowait(churning)
+    for _ in range(200):
+        await asyncio.sleep(0.01)
+        churning.write_bytes(b"still going")
+        if "upload_dropped_still_changing" in log.names():
+            break
+
+    assert handled == [], "a file that never settles must not be shipped"
+    assert "upload_dropped_still_changing" in log.names()
+    assert log.names().count("upload_deferred_unstable") == main_mod._MAX_REVALIDATIONS
+
+    worker.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await worker
+
+
+async def test_unstable_file_ships_once_it_settles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A deferred file is requeued, not dropped, and ships when it settles."""
+    monkeypatch.setattr(main_mod, "_REVALIDATE_DELAY", 0.05)
+    q: asyncio.Queue[Path] = asyncio.Queue()
+    log = _RecordingLog()
+    tray = _StubTray()
+    handled: list[Path] = []
+
+    late = tmp_path / "late.dat"
+    late.write_bytes(b"writing")
+
+    async def handle(path: Path) -> None:
+        handled.append(path)
+
+    worker = asyncio.create_task(
+        main_mod.upload_worker(q, handle, tray, log, None, 60.0)  # type: ignore[arg-type]
+    )
+    q.put_nowait(late)
+    await _settle(5)
+    assert handled == []
+    # The write finishes and the file settles before the requeue lands.
+    _age(late, 300)
+    for _ in range(200):
+        await asyncio.sleep(0.01)
+        if handled:
+            break
+
+    assert handled == [late]
+    assert "upload_deferred_unstable" in log.names()
+    assert "upload_dropped_still_changing" not in log.names()
+
+    worker.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await worker
+
+
+async def test_vanished_file_is_skipped_not_failed(tmp_path: Path) -> None:
+    """A queued path deleted before its turn is skipped quietly."""
+    q: asyncio.Queue[Path] = asyncio.Queue()
+    log = _RecordingLog()
+    tray = _StubTray()
+    handled: list[Path] = []
+
+    async def handle(path: Path) -> None:  # pragma: no cover, must never run
+        handled.append(path)
+
+    worker = asyncio.create_task(
+        main_mod.upload_worker(q, handle, tray, log, None, 60.0)  # type: ignore[arg-type]
+    )
+    q.put_nowait(tmp_path / "deleted.dat")
+    await asyncio.wait_for(q.join(), timeout=5)
+    await _settle()
+
+    assert handled == []
+    assert "skip_vanished_before_upload" in log.names()
+    assert tray.states == []
+
+    worker.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await worker
+
+
+async def test_held_file_keeps_its_queue_accounting() -> None:
+    """A held file is not marked done until it actually ships."""
+    q: asyncio.Queue[Path] = asyncio.Queue()
+    log = _RecordingLog()
+    tray = _StubTray()
+    resume = asyncio.Event()
+    resume.set()
+    handled: list[Path] = []
+
+    async def handle(path: Path) -> None:
+        handled.append(path)
+
+    worker = asyncio.create_task(
+        main_mod.upload_worker(q, handle, tray, log, resume)  # type: ignore[arg-type]
+    )
+    await _settle(5)
+    resume.clear()
+    q.put_nowait(Path("held.dat"))
+    await _settle(30)
+
+    assert handled == []
+    joined = asyncio.create_task(q.join())
+    await _settle(10)
+    assert not joined.done(), "join() must not report done while a file is held"
+
+    resume.set()
+    await asyncio.wait_for(joined, timeout=5)
+    assert handled == [Path("held.dat")]
+
+    worker.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await worker
+
+
+async def test_deferred_drain_stops_when_paused_mid_batch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pause landing mid-drain leaves the rest of the batch deferred."""
+    cfg = AppConfig()
+    cfg.server.url = "https://example.test"
+    cfg.agent.api_token = "tok"
+    dedup = DedupStore(tmp_path / "dedup.db")
+    tray = _StubTrayWithNotify()
+    log = _RecordingLog()
+
+    paths = []
+    for i in range(3):
+        f = tmp_path / f"m{i}.dat"
+        f.write_bytes(f"payload{i}".encode())
+        paths.append(f)
+
+    shipped: list[Path] = []
+
+    async def fake_ship(*args: object, **_kw: object) -> object:
+        shipped.append(args[2])  # type: ignore[arg-type]
+        # The user pauses partway through the drain.
+        tray._paused = True
+        return MagicMock(deduped=False, upload_id=1)
+
+    monkeypatch.setattr(shipper, "ship_file", AsyncMock(side_effect=fake_ship))
+
+    deferred = list(paths)
+    await main_mod._drain_deferred(
+        deferred,
+        cfg,
+        dedup,
+        tray,  # type: ignore[arg-type]
+        asyncio.Event(),
+        asyncio.Event(),
+        log,  # type: ignore[arg-type]
+    )
+
+    assert shipped == [paths[0]], "the drain must stop at the pause, not finish the batch"
+    assert deferred == paths[1:], "the rest of the batch stays deferred"
+    assert "drain_interrupted" in log.names()
+    dedup.close()
+
+
+async def test_deferred_drain_declines_to_start_while_paused(tmp_path: Path) -> None:
+    """A drain triggered while already paused ships nothing."""
+    cfg = AppConfig()
+    cfg.server.url = "https://example.test"
+    cfg.agent.api_token = "tok"
+    dedup = DedupStore(tmp_path / "dedup.db")
+    tray = _StubTrayWithNotify()
+    tray._paused = True
+    log = _RecordingLog()
+
+    f = tmp_path / "m.dat"
+    f.write_bytes(b"payload")
+    deferred = [f]
+
+    await main_mod._drain_deferred(
+        deferred,
+        cfg,
+        dedup,
+        tray,  # type: ignore[arg-type]
+        asyncio.Event(),
+        asyncio.Event(),
+        log,  # type: ignore[arg-type]
+    )
+
+    assert deferred == [f]
+    assert "drain_deferred_paused" in log.names()
+    dedup.close()
