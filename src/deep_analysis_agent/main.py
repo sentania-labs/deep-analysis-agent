@@ -714,6 +714,12 @@ async def _async_main() -> int:
     log = structlog.get_logger("deep_analysis_agent.main")
     _log_startup_banner(config, log)
 
+    # Older builds wrote the versioned Squirrel binary into the Run key, so
+    # login kept launching the pre-update build (issue #42). Repoint any such
+    # value at the stable Update.exe entry point. Runs before the first-run
+    # flow: it needs no config and must not depend on registration completing.
+    autostart.migrate_stale_command()
+
     if not config.agent.api_token:
         log.info("first_run_flow_start")
         ok = await run_first_run_flow(config)

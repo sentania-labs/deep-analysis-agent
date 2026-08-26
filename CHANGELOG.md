@@ -6,6 +6,9 @@
 - **Stability gate + finalized detection** — `mtgo.stability_seconds` default raised to 600s to align with MTGO's match timeout, eliminating intermediate snapshots of in-progress matches. Once a match log goes stable, the agent tail-scans for `wins the match` / `has conceded from the match`; if no signal is found, the file ships anyway tagged `agent_classification=inconclusive` so the server's holding pen can decide what to do with it.
 - **Autostart on Windows login** — agent registers itself under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` on first launch so it starts with Windows. A "Start with Windows" toggle in the tray menu lets users opt out; the choice persists across launches. Squirrel uninstall removes the Run-key entry (best-effort, dormant until the EXE is packed Squirrel-aware).
 
+### Fixes
+- **Autostart no longer pins the old version after an update**: the Windows Run key now stores Squirrel's stable `Update.exe --processStart DeepAnalysisAgent.exe` entry point instead of the versioned `app-<version>\DeepAnalysisAgent.exe` path, which Squirrel replaces on update. Run keys already written in the old form are rewritten on startup, so an affected user needs one manual launch (Start Menu shortcut) to pick the fix up.
+
 ## v0.4.10
 
 ### What's new
