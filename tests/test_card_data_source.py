@@ -231,7 +231,7 @@ async def test_check_and_ship_first_run(
     """First run ships all files and stores the combined hash."""
     cfg, dedup, cds_dir = cds_setup
 
-    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, file_id="f1"))
+    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, upload_id=1006))
     monkeypatch.setattr("deep_analysis_agent.card_data_source.ship_file", ship_mock)
 
     await check_and_ship(cfg, dedup)
@@ -248,7 +248,7 @@ async def test_check_and_ship_no_change(
     """Second run with no changes should not ship anything."""
     cfg, dedup, cds_dir = cds_setup
 
-    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, file_id="f1"))
+    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, upload_id=1006))
     monkeypatch.setattr("deep_analysis_agent.card_data_source.ship_file", ship_mock)
 
     await check_and_ship(cfg, dedup)
@@ -267,7 +267,7 @@ async def test_check_and_ship_after_change(
     """After a file changes, the new version is shipped."""
     cfg, dedup, cds_dir = cds_setup
 
-    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, file_id="f1"))
+    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, upload_id=1006))
     monkeypatch.setattr("deep_analysis_agent.card_data_source.ship_file", ship_mock)
 
     await check_and_ship(cfg, dedup)
@@ -325,7 +325,7 @@ async def test_check_and_ship_partial_failure(
         call_count += 1
         if call_count == 2:
             raise shipper.ShipError("network fail")
-        return shipper.UploadResult(deduped=False, file_id="ok")
+        return shipper.UploadResult(deduped=False, upload_id=1007)
 
     monkeypatch.setattr("deep_analysis_agent.card_data_source.ship_file", _flaky_ship)
 
@@ -353,7 +353,7 @@ async def test_check_and_ship_auto_detect(
 
     dedup = DedupStore(tmp_path / "dedup.db")
 
-    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, file_id="f1"))
+    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, upload_id=1006))
     monkeypatch.setattr("deep_analysis_agent.card_data_source.ship_file", ship_mock)
 
     await check_and_ship(cfg, dedup)
@@ -367,7 +367,7 @@ async def test_check_and_ship_uses_reference_data_content_type(
     """Shipped files use content_type=reference-data."""
     cfg, dedup, cds_dir = cds_setup
 
-    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, file_id="f1"))
+    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, upload_id=1006))
     monkeypatch.setattr("deep_analysis_agent.card_data_source.ship_file", ship_mock)
 
     await check_and_ship(cfg, dedup)
@@ -383,7 +383,7 @@ async def test_check_and_ship_preserves_original_filename(
     """Each file is shipped with its original filename."""
     cfg, dedup, cds_dir = cds_setup
 
-    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, file_id="f1"))
+    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, upload_id=1006))
     monkeypatch.setattr("deep_analysis_agent.card_data_source.ship_file", ship_mock)
 
     await check_and_ship(cfg, dedup)
@@ -404,7 +404,7 @@ async def test_check_and_ship_always_ships_all_files(
     sha = dedup.hash_file(f)
     dedup.mark_seen(sha, f)
 
-    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, file_id="f1"))
+    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, upload_id=1006))
     monkeypatch.setattr("deep_analysis_agent.card_data_source.ship_file", ship_mock)
 
     await check_and_ship(cfg, dedup)

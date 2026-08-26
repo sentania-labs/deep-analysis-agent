@@ -60,7 +60,7 @@ async def test_mark_seen_after_ship(
 ) -> None:
     cfg, dedup, tray, sample = ctx
 
-    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, file_id="f1"))
+    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, upload_id=1000))
     monkeypatch.setattr(shipper, "ship_file", ship_mock)
 
     log = structlog.get_logger("test")
@@ -109,7 +109,7 @@ async def test_permission_error_retries_then_succeeds(
     monkeypatch.setattr(dedup, "hash_file", _hash_side_effect)
     monkeypatch.setattr(main_mod, "_HASH_RETRY_DELAY", 0.0)
 
-    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, file_id="f2"))
+    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, upload_id=1001))
     monkeypatch.setattr(shipper, "ship_file", ship_mock)
 
     log = structlog.get_logger("test")
@@ -405,7 +405,7 @@ async def test_handle_file_proceeds_when_version_not_blocked(
     """When version_blocked is NOT set, _handle_file uploads normally."""
     cfg, dedup, tray, sample = ctx
 
-    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, file_id="f1"))
+    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, upload_id=1000))
     monkeypatch.setattr(shipper, "ship_file", ship_mock)
 
     version_blocked = asyncio.Event()  # not set
@@ -472,7 +472,7 @@ async def test_version_block_cleared_after_update_drains_deferred(
     # File arrives while blocked — should be deferred, not dropped.
     sample = tmp_path / "match.dat"
     sample.write_bytes(b"payload")
-    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, file_id="f1"))
+    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, upload_id=1000))
     monkeypatch.setattr(shipper, "ship_file", ship_mock)
     await main_mod._handle_file(
         sample,
@@ -564,7 +564,7 @@ async def test_deferred_files_processed_in_order_after_unblock(
     async def _ship_tracking(*args: object, **kwargs: object) -> shipper.UploadResult:
         path_arg = args[2]  # positional: url, token, path
         shipped_order.append(path_arg.name)
-        return shipper.UploadResult(deduped=False, file_id="fx")
+        return shipper.UploadResult(deduped=False, upload_id=1002)
 
     monkeypatch.setattr(shipper, "ship_file", _ship_tracking)
 
@@ -645,7 +645,7 @@ async def test_handle_file_passes_content_type_decklist(
     sample = tmp_path / "grouping 12345.xml"
     sample.write_bytes(b"<grouping>deck</grouping>")
 
-    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, file_id="f1"))
+    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, upload_id=1000))
     monkeypatch.setattr(shipper, "ship_file", ship_mock)
 
     log = structlog.get_logger("test")
@@ -664,7 +664,7 @@ async def test_handle_file_passes_content_type_match_log(
     """When handling a .dat match log, ship_file receives content_type=match-log."""
     cfg, dedup, tray, sample = ctx
 
-    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, file_id="f2"))
+    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, upload_id=1001))
     monkeypatch.setattr(shipper, "ship_file", ship_mock)
 
     log = structlog.get_logger("test")
@@ -756,7 +756,7 @@ async def test_decklist_same_hash_different_mtime_reshipped(
     sample = tmp_path / "grouping 12345.xml"
     sample.write_bytes(b"<grouping>deck v1</grouping>")
 
-    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, file_id="f1"))
+    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, upload_id=1000))
     monkeypatch.setattr(shipper, "ship_file", ship_mock)
 
     log = structlog.get_logger("test")
@@ -794,7 +794,7 @@ async def test_match_log_same_hash_still_skipped(
     sample = tmp_path / "Match_GameLog_99999.dat"
     sample.write_bytes(b"match log payload")
 
-    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, file_id="f1"))
+    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, upload_id=1000))
     monkeypatch.setattr(shipper, "ship_file", ship_mock)
 
     log = structlog.get_logger("test")
@@ -825,7 +825,7 @@ async def test_decklist_same_hash_same_mtime_skipped(
     sample = tmp_path / "grouping 77777.xml"
     sample.write_bytes(b"<grouping>stable deck</grouping>")
 
-    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, file_id="f1"))
+    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, upload_id=1000))
     monkeypatch.setattr(shipper, "ship_file", ship_mock)
 
     log = structlog.get_logger("test")
@@ -853,7 +853,7 @@ async def test_decklist_ship_includes_file_mtime(
     sample = tmp_path / "grouping 55555.xml"
     sample.write_bytes(b"<grouping>deck data</grouping>")
 
-    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, file_id="f1"))
+    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, upload_id=1000))
     monkeypatch.setattr(shipper, "ship_file", ship_mock)
 
     log = structlog.get_logger("test")
@@ -877,7 +877,7 @@ async def test_match_log_inconclusive_still_ships(
     sample = tmp_path / "Match_GameLog_inflight.dat"
     sample.write_bytes(b"opening hands\nturn 1\nturn 2\n")
 
-    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, file_id="i1"))
+    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, upload_id=1003))
     monkeypatch.setattr(shipper, "ship_file", ship_mock)
 
     log = structlog.get_logger("test")
@@ -901,7 +901,7 @@ async def test_match_log_complete_classification_passed(
     sample = tmp_path / "Match_GameLog_done.dat"
     sample.write_bytes(b"...turn 12...\nAlice wins the match\n")
 
-    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, file_id="c1"))
+    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, upload_id=1004))
     monkeypatch.setattr(shipper, "ship_file", ship_mock)
 
     log = structlog.get_logger("test")
@@ -925,7 +925,7 @@ async def test_decklist_no_agent_classification(
     sample = tmp_path / "grouping 31337.xml"
     sample.write_bytes(b"<grouping>deck</grouping>")
 
-    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, file_id="d1"))
+    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, upload_id=1005))
     monkeypatch.setattr(shipper, "ship_file", ship_mock)
 
     log = structlog.get_logger("test")
@@ -949,7 +949,7 @@ async def test_match_log_proper_name_no_file_mtime(
     sample = tmp_path / "Match_GameLog_12345.dat"
     sample.write_bytes(b"match log data")
 
-    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, file_id="f1"))
+    ship_mock = AsyncMock(return_value=shipper.UploadResult(deduped=False, upload_id=1000))
     monkeypatch.setattr(shipper, "ship_file", ship_mock)
 
     log = structlog.get_logger("test")

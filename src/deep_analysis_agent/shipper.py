@@ -27,8 +27,32 @@ class ShipError(RuntimeError):
 
 @dataclass(frozen=True)
 class UploadResult:
+    """Parsed ``POST /ingest/upload`` response.
+
+    Mirrors the server's ``UploadResponse``
+    (deep-analysis-server: services/ingest/ingest_service/schemas.py),
+    which returns ``sha256``, ``size_bytes``, ``deduped`` and
+    ``upload_id``. ``upload_id`` is the ``ingest.user_uploads`` row id:
+    it is what ties an agent-side upload to a server-side row when
+    troubleshooting, so it is the one field worth carrying here.
+    """
+
     deduped: bool
-    file_id: str | None
+    upload_id: int | None
+
+
+def _parse_upload_id(raw: object) -> int | None:
+    """Coerce the server's ``upload_id`` to an int, or None if unusable."""
+    if raw is None or isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+    return None
 
 
 def _timeout() -> httpx.Timeout:
@@ -85,7 +109,7 @@ async def ship_file(
             raise ShipError(f"network error after retry: {exc}") from exc
 
         if resp.status_code == 409:
-            return UploadResult(deduped=True, file_id=None)
+            return UploadResult(deduped=True, upload_id=None)
         if 500 <= resp.status_code < 600:
             logger.warning("ship_server_error", attempt=attempt, status=resp.status_code)
             if attempt == 1:
@@ -96,9 +120,12 @@ async def ship_file(
             raise ShipError(f"server returned {resp.status_code}: {resp.text[:200]}")
 
         payload = resp.json()
+        upload_id = _parse_upload_id(payload.get("upload_id"))
+        if upload_id is None:
+            logger.warning("ship_missing_upload_id", status=resp.status_code)
         return UploadResult(
             deduped=bool(payload.get("deduped", False)),
-            file_id=payload.get("file_id"),
+            upload_id=upload_id,
         )
 
     # Unreachable, but keeps mypy happy.
