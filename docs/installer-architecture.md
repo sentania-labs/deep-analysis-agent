@@ -42,6 +42,24 @@ On each launch, the agent's embedded `Update.exe` checks the GitHub Release `REL
 3. On next launch, Update.exe swaps to the new version.
 4. The old version directory is cleaned up.
 
+## Autostart and the stable entry point
+
+Because the running exe lives inside a versioned `app-<version>` directory
+that step 4 deletes, nothing that must survive an update may record that
+path. The Windows Run key therefore stores the Squirrel entry point:
+
+```text
+%LOCALAPPDATA%\DeepAnalysisAgent\Update.exe --processStart DeepAnalysisAgent.exe
+```
+
+`Update.exe` sits alongside the `app-*` directories rather than inside one,
+and always starts the newest installed version. Builds before this change
+wrote the versioned exe path directly, so login kept launching the
+pre-update build; the agent rewrites any such value on startup
+(`autostart.migrate_stale_command`). That rewrite only runs once the fixed
+build actually starts, so a user whose stale Run key points at an
+already-cleaned-up `app-*` directory must launch from the Start Menu once.
+
 ## Squirrel hooks
 
 The agent handles Squirrel's lifecycle hooks in `main.py`:

@@ -8,6 +8,7 @@ exercises.
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
@@ -76,8 +77,6 @@ def fake_registry(monkeypatch: pytest.MonkeyPatch) -> Iterator[_FakeWinreg]:
         "DeleteValue",
     ):
         setattr(fake_module, attr, getattr(fake, attr))
-
-    import sys
 
     monkeypatch.setitem(sys.modules, "winreg", fake_module)
     monkeypatch.setattr(autostart, "_is_windows", lambda: True)
@@ -202,7 +201,192 @@ def test_enable_handles_winreg_oserror(
     def _explode(*_a: Any, **_kw: Any) -> Any:
         raise OSError("registry handle leak simulation")
 
-    import sys
-
     sys.modules["winreg"].OpenKey = _explode  # type: ignore[attr-defined]
     assert autostart.enable() is False
+
+
+# --- Squirrel stable entry point (issue #42) ------------------------------
+#
+# On a Squirrel install the running exe lives in a versioned ``app-*``
+# directory that is replaced on update, so the Run key must go through
+# ``Update.exe`` instead. These tests fake the on-disk layout under
+# ``tmp_path`` and the ``sys.frozen`` / ``sys.executable`` pair; no real
+# Windows install is involved.
+
+
+@pytest.fixture
+def squirrel_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    """Build a fake Squirrel layout and point ``sys.executable`` into it.
+
+    Returns ``(update_exe, app_exe)``.
+    """
+    root = tmp_path / "DeepAnalysisAgent"
+    app_dir = root / "app-0.4.8"
+    app_dir.mkdir(parents=True)
+    update_exe = root / "Update.exe"
+    update_exe.write_text("stub", encoding="utf-8")
+    app_exe = app_dir / "DeepAnalysisAgent.exe"
+    app_exe.write_text("stub", encoding="utf-8")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(app_exe))
+    return update_exe.resolve(), app_exe
+
+
+@pytest.fixture
+def frozen_non_squirrel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A frozen exe with no ``Update.exe`` above it (PyInstaller-only build)."""
+    exe = tmp_path / "standalone" / "DeepAnalysisAgent.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("stub", encoding="utf-8")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(exe))
+    return exe
+
+
+def test_exe_command_dev_uses_interpreter(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Non-frozen dev run: the Run command is just the quoted executable."""
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    cmd = autostart._exe_command()
+    assert cmd == f'"{sys.executable}"'
+    assert "--processStart" not in cmd
+
+
+def test_exe_command_frozen_non_squirrel_uses_exe(frozen_non_squirrel: Path) -> None:
+    """Frozen but no Update.exe alongside: fall back to the exe path."""
+    cmd = autostart._exe_command()
+    assert cmd == f'"{frozen_non_squirrel}"'
+    assert "--processStart" not in cmd
+
+
+def test_exe_command_squirrel_uses_update_exe(squirrel_install: tuple[Path, Path]) -> None:
+    """Squirrel layout: go through the stable Update.exe entry point."""
+    update_exe, app_exe = squirrel_install
+    cmd = autostart._exe_command()
+    assert cmd == f'"{update_exe}" --processStart DeepAnalysisAgent.exe'
+    # The versioned app dir must not appear anywhere in the command.
+    assert "app-0.4.8" not in cmd
+    assert str(app_exe) not in cmd
+
+
+def test_enable_writes_squirrel_command(
+    fake_registry: _FakeWinreg, squirrel_install: tuple[Path, Path]
+) -> None:
+    update_exe, _ = squirrel_install
+    assert autostart.enable() is True
+    assert (
+        fake_registry.store["DeepAnalysisAgent"]
+        == f'"{update_exe}" --processStart DeepAnalysisAgent.exe'
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "stale"),
+    [
+        (r'"C:\Users\s\AppData\Local\DeepAnalysisAgent\app-0.4.8\DeepAnalysisAgent.exe"', True),
+        (
+            r'"C:\Users\s\AppData\Local\DeepAnalysisAgent\app-1.2.3-beta\DeepAnalysisAgent.exe"',
+            True,
+        ),
+        (
+            r'"C:\Users\s\AppData\Local\DeepAnalysisAgent\Update.exe" '
+            r"--processStart DeepAnalysisAgent.exe",
+            False,
+        ),
+        (r'"C:\Program Files\Python312\python.exe" -m deep_analysis_agent', False),
+        (r'"C:\tools\DeepAnalysisAgent\DeepAnalysisAgent.exe"', False),
+        # Windows paths are case-insensitive: App-0.4.8 is the same dir.
+        (r'"C:\Users\s\AppData\Local\DeepAnalysisAgent\App-0.4.8\DeepAnalysisAgent.exe"', True),
+        # Forward slashes are legal in Win32 API paths.
+        ('"C:/Users/s/AppData/Local/DeepAnalysisAgent/app-0.4.8/DeepAnalysisAgent.exe"', True),
+        # Unquoted, with trailing arguments.
+        (
+            r"C:\Users\s\AppData\Local\DeepAnalysisAgent\app-0.4.8\DeepAnalysisAgent.exe --quiet",
+            True,
+        ),
+        # An Update.exe command is never stale, wherever it lives.
+        (r'"C:\Users\s\Update.exe" --processStart DeepAnalysisAgent.exe', False),
+    ],
+)
+def test_is_stale_command(value: str, stale: bool) -> None:
+    assert autostart._is_stale_command(value) is stale
+
+
+def test_migrate_rewrites_stale_value(
+    fake_registry: _FakeWinreg, squirrel_install: tuple[Path, Path]
+) -> None:
+    """A Run key left by an older build is repointed at Update.exe."""
+    update_exe, app_exe = squirrel_install
+    fake_registry.store["DeepAnalysisAgent"] = f'"{app_exe}"'
+    assert autostart.migrate_stale_command() is True
+    assert (
+        fake_registry.store["DeepAnalysisAgent"]
+        == f'"{update_exe}" --processStart DeepAnalysisAgent.exe'
+    )
+
+
+def test_migrate_is_noop_when_already_stable(
+    fake_registry: _FakeWinreg, squirrel_install: tuple[Path, Path]
+) -> None:
+    update_exe, _ = squirrel_install
+    stable = f'"{update_exe}" --processStart DeepAnalysisAgent.exe'
+    fake_registry.store["DeepAnalysisAgent"] = stable
+    assert autostart.migrate_stale_command() is False
+    assert fake_registry.store["DeepAnalysisAgent"] == stable
+
+
+def test_migrate_does_not_reenable_after_opt_out(
+    fake_registry: _FakeWinreg, squirrel_install: tuple[Path, Path]
+) -> None:
+    """No Run value means the user opted out: migration must not write one."""
+    assert autostart.is_enabled() is False
+    assert autostart.migrate_stale_command() is False
+    assert "DeepAnalysisAgent" not in fake_registry.store
+
+
+def test_migrate_is_noop_on_dev_build(
+    fake_registry: _FakeWinreg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without a Squirrel layout there is no better command to write."""
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    stale = r'"C:\Users\s\AppData\Local\DeepAnalysisAgent\app-0.4.8\DeepAnalysisAgent.exe"'
+    fake_registry.store["DeepAnalysisAgent"] = stale
+    assert autostart.migrate_stale_command() is False
+    assert fake_registry.store["DeepAnalysisAgent"] == stale
+
+
+def test_migrate_is_noop_off_windows(
+    monkeypatch: pytest.MonkeyPatch, squirrel_install: tuple[Path, Path]
+) -> None:
+    monkeypatch.setattr(autostart, "_is_windows", lambda: False)
+    assert autostart.migrate_stale_command() is False
+
+
+def test_migrate_reports_failure_when_registry_write_fails(
+    fake_registry: _FakeWinreg,
+    squirrel_install: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed write leaves the stale value alone and reports False, so the
+    next launch tries again rather than silently claiming success."""
+    _, app_exe = squirrel_install
+    stale = f'"{app_exe}"'
+    fake_registry.store["DeepAnalysisAgent"] = stale
+    monkeypatch.setattr(autostart, "enable", lambda: False)
+    assert autostart.migrate_stale_command() is False
+    assert fake_registry.store["DeepAnalysisAgent"] == stale
+
+
+def test_exe_command_quotes_exe_name_with_space(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The --processStart argument is quoted if the exe name has a space."""
+    root = tmp_path / "DeepAnalysisAgent"
+    app_dir = root / "app-0.4.8"
+    app_dir.mkdir(parents=True)
+    (root / "Update.exe").write_text("stub", encoding="utf-8")
+    exe = app_dir / "Deep Analysis Agent.exe"
+    exe.write_text("stub", encoding="utf-8")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(exe))
+    cmd = autostart._exe_command()
+    assert cmd.endswith('--processStart "Deep Analysis Agent.exe"')
