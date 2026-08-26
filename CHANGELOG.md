@@ -7,6 +7,7 @@
 - **Autostart on Windows login** — agent registers itself under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` on first launch so it starts with Windows. A "Start with Windows" toggle in the tray menu lets users opt out; the choice persists across launches. Squirrel uninstall removes the Run-key entry (best-effort, dormant until the EXE is packed Squirrel-aware).
 
 ### Fixes
+- **First-run registration failures are visible again**: the packaged agent is a tray app with no console, so a failed registration only ever `print()`ed to nowhere and the agent appeared to vanish. Failures now surface in a message box (retry/cancel while attempts remain, error on the last one), the email/password path retries up to 3 times like the registration-code path already did, and cancelling a dialog no longer falls through to a blocking console read. `print()` survives only where tkinter is genuinely unavailable.
 - **Autostart no longer pins the old version after an update**: the Windows Run key now stores Squirrel's stable `Update.exe --processStart DeepAnalysisAgent.exe` entry point instead of the versioned `app-<version>\DeepAnalysisAgent.exe` path, which Squirrel replaces on update. Run keys already written in the old form are rewritten on startup, so an affected user needs one manual launch (Start Menu shortcut) to pick the fix up.
 
 ## v0.4.10
