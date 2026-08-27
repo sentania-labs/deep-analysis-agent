@@ -420,8 +420,58 @@ def _report_registration_failure(message: str, *, can_retry: bool) -> bool:
     return retry
 
 
+def _report_unexpected_failure(exc: BaseException) -> None:
+    """Tell the user first-run setup broke in a way the flow did not expect.
+
+    `_report_registration_failure` only covers `auth.RegistrationError`, the
+    one failure the registration calls promise to raise. Everything else (a
+    non-JSON 200, a response missing `agent_id`, a config file that cannot be
+    written) used to escape to a console the tray app does not have, so the
+    user just saw the agent disappear. Same surface, same headless fallback,
+    no retry offer: the flow is already unwinding by the time we get here.
+    """
+    detail = f"{type(exc).__name__}: {exc}".strip().rstrip(":")
+    message = (
+        "Deep Analysis could not finish first-run setup.\n\n"
+        f"{detail}\n\n"
+        "Start Deep Analysis again to retry. If this keeps happening, "
+        "check the agent log for details."
+    )
+
+    root = _tk_root()
+    if root is None:
+        print(f"First-run setup failed: {detail}")
+        return
+
+    try:
+        from tkinter import messagebox
+
+        messagebox.showerror("Deep Analysis: setup failed", message)
+    except Exception:
+        logger.exception("unexpected_failure_dialog_failed")
+        print(f"First-run setup failed: {detail}")
+    finally:
+        _destroy(root)
+
+
 async def run_first_run_flow(config: AppConfig) -> bool:
-    """Drive the interactive registration flow. Returns True on success."""
+    """Drive the interactive registration flow. Returns True on success.
+
+    Nothing in here is allowed to raise at the caller. A tray app that
+    exits on an unhandled traceback is indistinguishable from a crash, so
+    an unexpected failure is logged, shown to the user, and turned into a
+    plain False.
+    """
+    try:
+        return await _run_first_run_flow(config)
+    except Exception as exc:
+        logger.exception("first_run_unexpected_error", error=str(exc))
+        _report_unexpected_failure(exc)
+        return False
+
+
+async def _run_first_run_flow(config: AppConfig) -> bool:
+    """The flow itself. Call `run_first_run_flow`, which guards this."""
     if not config.agent.machine_name:
         config.agent.machine_name = _default_machine_name()
 

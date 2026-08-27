@@ -544,3 +544,105 @@ class TestAgentNameAskedOncePerFlow:
         assert asyncio.run(run_first_run_flow(AppConfig())) is True
         assert sum("agent name" in p.lower() for p in fake_tk.askstring_calls) == 1
         assert [c["agent_name"] for c in calls] == ["my-desk", "my-desk"]
+
+
+# --- run_first_run_flow: unexpected failures are visible too (agent issue #55) ---
+#
+# `auth.register` / `auth.register_with_credentials` only promise to raise
+# `RegistrationError` for `httpx.HTTPError` and the status codes they know.
+# A non-JSON 200 body makes `resp.json()` raise, and a 200 whose body is
+# missing `agent_id` raises KeyError. `save_config` runs after a successful
+# registration and can fail on permissions or a full disk. None of those is
+# a RegistrationError, so before #55 they escaped the flow entirely and the
+# tray app just vanished.
+
+
+class TestUnexpectedFailuresAreVisible:
+    def test_non_json_200_shows_dialog_and_does_not_raise(
+        self,
+        fake_tk: FakeTkinter,
+        no_stdin: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A 200 with an unparseable body reaches the user as a dialog."""
+        _flow_env(monkeypatch, method=2)
+        fake_tk.answers = {"registration code": "GOOD-1111"}
+        calls: list[dict[str, object]] = []
+        monkeypatch.setattr(
+            auth,
+            "register",
+            _scripted_register([ValueError("Expecting value: line 1 column 1 (char 0)")], calls),
+        )
+
+        assert asyncio.run(run_first_run_flow(AppConfig())) is False
+        assert len(fake_tk.showerror_calls) == 1
+        title, message = fake_tk.showerror_calls[0]
+        assert "setup failed" in title.lower()
+        assert "ValueError" in message
+        assert fake_tk.roots_created == fake_tk.roots_destroyed
+
+    def test_response_missing_agent_id_shows_dialog(
+        self,
+        fake_tk: FakeTkinter,
+        no_stdin: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A KeyError from a short response body is reported, not raised."""
+        _flow_env(monkeypatch, method=1)
+        fake_tk.answers = {
+            "email": "me@example.com",
+            "password": "pw",
+            "agent name": None,
+        }
+        calls: list[dict[str, object]] = []
+        monkeypatch.setattr(
+            auth,
+            "register_with_credentials",
+            _scripted_register([KeyError("agent_id")], calls),
+        )
+
+        assert asyncio.run(run_first_run_flow(AppConfig())) is False
+        assert len(calls) == 1
+        assert len(fake_tk.showerror_calls) == 1
+        assert "agent_id" in fake_tk.showerror_calls[0][1]
+        # Not a registration rejection, so no retry offer.
+        assert fake_tk.askretrycancel_calls == []
+
+    def test_save_config_failure_after_success_shows_dialog(
+        self,
+        fake_tk: FakeTkinter,
+        no_stdin: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The worst case: credentials handed over, then the write fails."""
+        _flow_env(monkeypatch, method=2)
+
+        def _cannot_save(_config: AppConfig) -> None:
+            raise PermissionError(13, "Permission denied", "config.toml")
+
+        monkeypatch.setattr("deep_analysis_agent.first_run.save_config", _cannot_save)
+        fake_tk.answers = {"registration code": "GOOD-1111"}
+        calls: list[dict[str, object]] = []
+        monkeypatch.setattr(auth, "register", _scripted_register([_result()], calls))
+
+        assert asyncio.run(run_first_run_flow(AppConfig())) is False
+        assert len(fake_tk.showerror_calls) == 1
+        assert "PermissionError" in fake_tk.showerror_calls[0][1]
+
+    def test_headless_unexpected_failure_prints(
+        self,
+        no_tkinter: None,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """With no GUI at all, stdout is still the right channel."""
+        monkeypatch.setattr("deep_analysis_agent.first_run._prompt_method", lambda: 2)
+        monkeypatch.setattr("builtins.input", lambda _prompt: "GOOD-1111")
+        monkeypatch.setattr(
+            "deep_analysis_agent.first_run._resolve_mtgo_log_dir", lambda _config: None
+        )
+        calls: list[dict[str, object]] = []
+        monkeypatch.setattr(auth, "register", _scripted_register([KeyError("agent_id")], calls))
+
+        assert asyncio.run(run_first_run_flow(AppConfig())) is False
+        assert "First-run setup failed" in capsys.readouterr().out
