@@ -27,7 +27,6 @@ after that is treated as a decline. It is not a licence to read stdin.
 
 from __future__ import annotations
 
-import asyncio
 import platform
 import socket
 from datetime import UTC, datetime
@@ -454,6 +453,34 @@ def _report_unexpected_failure(exc: BaseException) -> None:
         _destroy(root)
 
 
+def _report_registration_success(agent_id: str) -> None:
+    """Confirm a successful registration on the same surface as a failure.
+
+    Registration ends with the agent going quiet in the tray, which looks
+    identical to it having died. Say so out loud, and say it on both
+    branches: a confirmation the code path happens to print is not a
+    confirmation the user sees.
+    """
+    message = (
+        f"Deep Analysis is registered and watching for MTGO game logs.\n\nAgent ID: {agent_id}"
+    )
+
+    root = _tk_root()
+    if root is None:
+        print(f"Registered! Agent ID: {agent_id}")
+        return
+
+    try:
+        from tkinter import messagebox
+
+        messagebox.showinfo("Deep Analysis: registered", message)
+    except Exception:
+        logger.exception("registration_success_dialog_failed")
+        print(f"Registered! Agent ID: {agent_id}")
+    finally:
+        _destroy(root)
+
+
 async def run_first_run_flow(config: AppConfig) -> bool:
     """Drive the interactive registration flow. Returns True on success.
 
@@ -475,16 +502,11 @@ async def _run_first_run_flow(config: AppConfig) -> bool:
     if not config.agent.machine_name:
         config.agent.machine_name = _default_machine_name()
 
-    method: int | None = None
-    for _ in range(3):
-        method = _prompt_method()
-        if method in (1, 2):
-            break
-        if method is None:
-            logger.info("first_run_cancelled")
-            return False
+    # `_prompt_method` returns 1, 2, or None, and None is a cancel. There is
+    # nothing to retry here, so this is a single question, not a loop.
+    method = _prompt_method()
     if method not in (1, 2):
-        logger.error("first_run_no_method_selected")
+        logger.info("first_run_cancelled")
         return False
 
     if method == 1:
@@ -522,7 +544,7 @@ async def _run_first_run_flow(config: AppConfig) -> bool:
             config.agent.registered_at = datetime.now(UTC)
             _resolve_mtgo_log_dir(config)
             save_config(config)
-            print(f"Registered! Agent ID: {result.agent_id}")
+            _report_registration_success(result.agent_id)
             logger.info(
                 "first_run_registered",
                 agent_id=result.agent_id,
@@ -560,6 +582,7 @@ async def _run_first_run_flow(config: AppConfig) -> bool:
         config.agent.registered_at = datetime.now(UTC)
         _resolve_mtgo_log_dir(config)
         save_config(config)
+        _report_registration_success(result.agent_id)
         logger.info(
             "first_run_registered",
             agent_id=result.agent_id,
@@ -570,8 +593,3 @@ async def _run_first_run_flow(config: AppConfig) -> bool:
 
     logger.error("first_run_gave_up", method="code")
     return False
-
-
-def run_first_run_flow_sync(config: AppConfig) -> bool:
-    """Sync wrapper for callers not already in an event loop."""
-    return asyncio.run(run_first_run_flow(config))

@@ -119,6 +119,7 @@ class FakeTkinter:
         self.askretrycancel_answers: list[bool] = []
         self.askstring_calls: list[str] = []
         self.showerror_calls: list[tuple[str, str]] = []
+        self.showinfo_calls: list[tuple[str, str]] = []
         self.askretrycancel_calls: list[tuple[str, str]] = []
         self.roots_created = 0
         self.roots_destroyed = 0
@@ -139,6 +140,10 @@ class FakeTkinter:
 
     def showerror(self, title: str, message: str, **_kw: Any) -> str:
         self.showerror_calls.append((title, message))
+        return "ok"
+
+    def showinfo(self, title: str, message: str, **_kw: Any) -> str:
+        self.showinfo_calls.append((title, message))
         return "ok"
 
     def askretrycancel(self, title: str, message: str, **_kw: Any) -> bool:
@@ -163,6 +168,7 @@ def _install_fake_tkinter(monkeypatch: Any) -> FakeTkinter:
 
     messagebox_mod = types.ModuleType("tkinter.messagebox")
     messagebox_mod.showerror = fake.showerror  # type: ignore[attr-defined]
+    messagebox_mod.showinfo = fake.showinfo  # type: ignore[attr-defined]
     messagebox_mod.askretrycancel = fake.askretrycancel  # type: ignore[attr-defined]
 
     filedialog_mod = types.ModuleType("tkinter.filedialog")

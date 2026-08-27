@@ -37,6 +37,7 @@ from deep_analysis_agent.first_run import (
     _prompt_method,
     _prompt_method_stdin,
     _report_registration_failure,
+    _report_registration_success,
     _resolve_mtgo_log_dir,
     run_first_run_flow,
 )
@@ -646,3 +647,108 @@ class TestUnexpectedFailuresAreVisible:
 
         assert asyncio.run(run_first_run_flow(AppConfig())) is False
         assert "First-run setup failed" in capsys.readouterr().out
+
+
+# --- first-run cleanups (agent issue #56) ---
+
+
+class TestSuccessConfirmationIsVisibleOnBothBranches:
+    """`print("Registered!")` was invisible in the tray app and code-path-blind.
+
+    The confirmation now goes through the same GUI surface as the failure
+    dialog, on both registration branches, with stdout kept for headless.
+    """
+
+    def test_credentials_branch_shows_confirmation_dialog(
+        self,
+        fake_tk: FakeTkinter,
+        no_stdin: None,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        _flow_env(monkeypatch, method=1)
+        fake_tk.answers = {
+            "email": "me@example.com",
+            "password": "pw",
+            "agent name": None,
+        }
+        calls: list[dict[str, object]] = []
+        monkeypatch.setattr(
+            auth, "register_with_credentials", _scripted_register([_result()], calls)
+        )
+
+        assert asyncio.run(run_first_run_flow(AppConfig())) is True
+        assert len(fake_tk.showinfo_calls) == 1
+        assert "agent-1" in fake_tk.showinfo_calls[0][1]
+        assert "Registered!" not in capsys.readouterr().out
+        assert fake_tk.roots_created == fake_tk.roots_destroyed
+
+    def test_code_branch_shows_the_same_confirmation(
+        self,
+        fake_tk: FakeTkinter,
+        no_stdin: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The asymmetry is the bug: this branch had no confirmation at all."""
+        _flow_env(monkeypatch, method=2)
+        fake_tk.answers = {"registration code": "GOOD-1111"}
+        calls: list[dict[str, object]] = []
+        monkeypatch.setattr(auth, "register", _scripted_register([_result()], calls))
+
+        assert asyncio.run(run_first_run_flow(AppConfig())) is True
+        assert len(fake_tk.showinfo_calls) == 1
+        assert "agent-1" in fake_tk.showinfo_calls[0][1]
+
+    def test_headless_falls_back_to_stdout(
+        self, no_tkinter: None, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _report_registration_success("agent-1")
+        assert "Registered! Agent ID: agent-1" in capsys.readouterr().out
+
+    def test_destroys_its_root_window(self, fake_tk: FakeTkinter) -> None:
+        _report_registration_success("agent-1")
+        assert fake_tk.roots_created == fake_tk.roots_destroyed == 1
+
+
+class TestMethodSelectionAsksOnce:
+    """`_prompt_method` returns 1, 2, or None, so there was nothing to loop."""
+
+    def test_cancel_ends_the_flow_without_reprompting(
+        self, fake_tk: FakeTkinter, no_stdin: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        prompts: list[int] = []
+
+        def _cancelled() -> None:
+            prompts.append(1)
+            return None
+
+        monkeypatch.setattr("deep_analysis_agent.first_run._prompt_method", _cancelled)
+
+        assert asyncio.run(run_first_run_flow(AppConfig())) is False
+        assert len(prompts) == 1
+
+    def test_selection_is_asked_exactly_once_on_success(
+        self, fake_tk: FakeTkinter, no_stdin: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        prompts: list[int] = []
+
+        def _picks_code() -> int:
+            prompts.append(2)
+            return 2
+
+        _flow_env(monkeypatch, method=2)
+        monkeypatch.setattr("deep_analysis_agent.first_run._prompt_method", _picks_code)
+        fake_tk.answers = {"registration code": "GOOD-1111"}
+        calls: list[dict[str, object]] = []
+        monkeypatch.setattr(auth, "register", _scripted_register([_result()], calls))
+
+        assert asyncio.run(run_first_run_flow(AppConfig())) is True
+        assert prompts == [2]
+
+
+class TestDeadSyncWrapperIsGone:
+    def test_run_first_run_flow_sync_no_longer_exists(self) -> None:
+        """Zero callers: main.py awaits the async flow directly."""
+        import deep_analysis_agent.first_run as first_run_module
+
+        assert not hasattr(first_run_module, "run_first_run_flow_sync")
