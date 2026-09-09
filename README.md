@@ -6,7 +6,7 @@ The agent runs silently in your system tray, monitors your MTGO log directory, a
 
 ## What it does
 
-- Watches your MTGO log directory for new `.dat` / `.log` files
+- Watches your MTGO log directory using [configurable file filters](docs/settings-reference.md#advanced-mtgo-input-rules)
 - Detects match-complete events and ships raw log files to the server
 - Deduplicates uploads by SHA-256 so retries are safe
 - Updates through the tray via Squirrel.Windows (no UAC prompts)
@@ -18,7 +18,7 @@ Download the latest `Setup.exe` from the [GitHub Releases](https://github.com/se
 
 Squirrel installs the agent silently to `%LOCALAPPDATA%\DeepAnalysisAgent\` — no UAC prompt, no admin rights required.
 
-**First run:** the Deep Analysis tray icon will appear. Right-click → Settings to paste your registration code. Get a code from your server admin (or generate one via the admin UI).
+**First run:** follow [First-run registration](#first-run-registration) to connect the agent to your account.
 
 **Updates:** right-click the tray icon and select **Check for Updates**. The agent
 checks for a release and, if available, runs the installer in the background.
@@ -60,8 +60,8 @@ Every 5 minutes the agent heartbeats the server so your account dashboard shows 
 
 - **Revoked token** — tray turns red and uploads stop. Mint a new registration code and use **Tray → Re-register...**.
 - **Server unreachable** — uploads retry once on transient 5xx/network errors. Persistent failures leave the file on disk; the watcher picks it up again on the next launch or directory change.
-- **Logs** — structured JSON logs live under `%LOCALAPPDATA%\DeepAnalysis\logs\`. **Tray → Open logs folder** jumps straight there.
-- **Config** — `%LOCALAPPDATA%\DeepAnalysis\config.toml`. The `api_token` is never stored in plaintext on Windows; only the DPAPI-encrypted `api_token_enc` field is written.
+- **Logs:** use the [logging controls](docs/settings-reference.md#logging-and-tls-validation) to choose the location and format.
+- **Config:** `%LOCALAPPDATA%\DeepAnalysis\config.toml`. The `api_token` is never stored in plaintext on Windows; only the DPAPI-encrypted `api_token_enc` field is written. See the [settings reference](docs/settings-reference.md) for ownership and GUI controls.
 
 See [`docs/auth-flow.md`](docs/auth-flow.md) for full details of the registration + heartbeat protocol.
 
