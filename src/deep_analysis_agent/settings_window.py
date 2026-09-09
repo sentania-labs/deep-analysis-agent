@@ -237,6 +237,7 @@ class SettingsWindow:
             return
 
         cfg = self._config
+        initial_card_data = (cfg.mtgo.card_data_source_enabled, cfg.mtgo.card_data_source_dir)
 
         root = tk.Tk()
         self._root = root
@@ -514,6 +515,11 @@ class SettingsWindow:
         )
         validation_label.grid(row=row, column=0, columnspan=3, sticky="w", pady=(0, 8))
         row += 1
+        save_notice_var = tk.StringVar(value="")
+        ttk.Label(frame, textvariable=save_notice_var, wraplength=520).grid(
+            row=row, column=0, columnspan=3, sticky="w", pady=(0, 8)
+        )
+        row += 1
 
         def _save() -> None:
             try:
@@ -586,6 +592,17 @@ class SettingsWindow:
                 self._on_save()
             except Exception:
                 logger.exception("Settings on_save callback raised")
+            if initial_card_data != (
+                new_config.mtgo.card_data_source_enabled,
+                new_config.mtgo.card_data_source_dir,
+            ):
+                save_notice_var.set(
+                    "Settings saved. CardDataSource changes apply after the agent restarts."
+                )
+                cancel_button.configure(text="Close")
+                root.update_idletasks()
+                canvas.yview_moveto(1.0)
+                return
             root.destroy()
 
         def _cancel() -> None:
@@ -604,9 +621,8 @@ class SettingsWindow:
         ttk.Button(button_row, text="Open config file", command=_open_raw).grid(
             row=0, column=0, sticky="w"
         )
-        ttk.Button(button_row, text="Cancel", command=_cancel).grid(
-            row=0, column=1, sticky="e", padx=(0, 6)
-        )
+        cancel_button = ttk.Button(button_row, text="Cancel", command=_cancel)
+        cancel_button.grid(row=0, column=1, sticky="e", padx=(0, 6))
         ttk.Button(button_row, text="Save", command=_save).grid(row=0, column=2, sticky="e")
 
         root.protocol("WM_DELETE_WINDOW", _cancel)

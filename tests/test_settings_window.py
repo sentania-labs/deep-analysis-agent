@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -553,3 +554,92 @@ def test_apply_autostart_change_returns_message_on_disable_failure(
     err = apply_autostart_change(desired=False)
     assert err is not None
     assert "disable" in err.lower()
+
+
+@pytest.mark.parametrize("change", ["enable", "disable", "directory", "auto_detect", "unrelated"])
+def test_save_card_data_restart_notice(
+    monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    tk = MagicMock()
+    tk.TclError = RuntimeError
+    variables: list[MagicMock] = []
+
+    def variable(*, value: Any) -> MagicMock:
+        var = MagicMock()
+        var.get.return_value = value
+        var.set.side_effect = lambda value: setattr(var.get, "return_value", value)
+        variables.append(var)
+        return var
+
+    def text_widget(*args: Any, **kwargs: Any) -> MagicMock:
+        widget = MagicMock()
+        widget.insert.side_effect = lambda index, text: setattr(widget.get, "return_value", text)
+        return widget
+
+    tk.StringVar.side_effect = variable
+    tk.BooleanVar.side_effect = variable
+    tk.IntVar.side_effect = variable
+    tk.Text.side_effect = text_widget
+    root = tk.Tk.return_value
+    root.winfo_screenheight.return_value = 1000
+    tk.ttk.Frame.return_value.winfo_reqheight.return_value = 1200
+    monkeypatch.setitem(sys.modules, "tkinter", tk)
+    monkeypatch.setattr(settings_window_mod.autostart, "is_enabled", lambda: False)
+    monkeypatch.setattr(settings_window_mod, "apply_autostart_change", lambda enabled: None)
+    save = MagicMock()
+    monkeypatch.setattr(settings_window_mod, "save_config", save)
+    cfg = AppConfig()
+    cfg.server.url = "https://example.test"
+    cfg.mtgo.card_data_source_enabled = change != "enable"
+    cfg.mtgo.card_data_source_dir = Path("old-cards")
+    reload_callback = MagicMock()
+    notices: list[str] = []
+
+    def interact() -> None:
+        for call in tk.ttk.Checkbutton.call_args_list:
+            if (
+                call.kwargs.get("text") == "Upload MTGO card data"
+                and change in {"enable", "disable"}
+            ):
+                call.kwargs["variable"].set(change == "enable")
+            if (
+                call.kwargs.get("text") == "Auto-detect from MTGO log directory"
+                and change == "auto_detect"
+            ):
+                call.kwargs["variable"].set(True)
+        if change == "directory":
+            next(var for var in variables if var.get() == "old-cards").set("new-cards")
+        if change == "unrelated":
+            next(var for var in variables if var.get() == "https://example.test").set(
+                "https://other.test"
+            )
+        save_button = next(
+            call.kwargs["command"]
+            for call in tk.ttk.Button.call_args_list
+            if call.kwargs.get("text") == "Save"
+        )
+        save_button()
+        notices.extend(str(var.get()) for var in variables)
+
+    root.mainloop.side_effect = interact
+    SettingsWindow(cfg, on_save=reload_callback)._run()
+
+    save.assert_called_once()
+    reload_callback.assert_called_once_with()
+    tk.messagebox.showerror.assert_not_called()
+    notice = "Settings saved. CardDataSource changes apply after the agent restarts."
+    if change == "unrelated":
+        assert notice not in notices
+        root.destroy.assert_called_once()
+    else:
+        assert notice in notices
+        root.destroy.assert_not_called()
+        tk.Canvas.return_value.yview_moveto.assert_called_once_with(1.0)
+        tk.ttk.Button.return_value.configure.assert_called_with(text="Close")
+    saved = save.call_args.args[0]
+    if change in {"enable", "disable"}:
+        assert saved.mtgo.card_data_source_enabled is (change == "enable")
+    elif change == "directory":
+        assert saved.mtgo.card_data_source_dir == Path("new-cards")
+    elif change == "auto_detect":
+        assert saved.mtgo.card_data_source_dir is None

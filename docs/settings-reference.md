@@ -44,3 +44,12 @@ is registry-backed and is not part of the persisted settings models.
   directory value remains available if uploads are enabled again.
 
 ![Advanced MTGO settings on Linux test display](screenshots/advanced-mtgo-settings.png)
+
+CardDataSource enable state and directory changes apply after the agent restarts.
+Saving either change keeps Settings open with an inline restart notice.
+
+## PR handoff
+
+Follow-up for firstmate to file as an issue: apply CardDataSource changes without
+restart. Include this follow-up in the PR body. Background-task lifecycle handling
+on reload is deferred from this change.
