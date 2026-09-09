@@ -94,6 +94,7 @@ class AgentSettings(BaseModel):
     api_token: str | None = None
     registered_at: datetime | None = None
     heartbeat_interval_seconds: int = 300
+    update_timeout_seconds: int = Field(default=120, ge=1, le=3600)
 
 
 class LoggingSettings(BaseModel):

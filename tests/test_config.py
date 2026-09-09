@@ -17,8 +17,18 @@ def test_defaults_load_without_config_file(tmp_path: Path, monkeypatch) -> None:
     assert cfg.mtgo.stability_seconds == 600.0
     assert cfg.server.tls_verify is True
     assert cfg.logging.level == "INFO"
+    assert cfg.agent.update_timeout_seconds == 120
     assert ".dat" in cfg.mtgo.watched_suffixes
     assert ".xml" in cfg.mtgo.watched_suffixes
+
+
+def test_update_timeout_env_override(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setenv("DEEP_ANALYSIS_AGENT__UPDATE_TIMEOUT_SECONDS", "240")
+
+    cfg = AppConfig()
+
+    assert cfg.agent.update_timeout_seconds == 240
 
 
 def test_env_override_nested(tmp_path: Path, monkeypatch) -> None:

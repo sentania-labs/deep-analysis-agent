@@ -2,51 +2,65 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import subprocess
-import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
+
+from .paths import SQUIRREL_APP_DIR_PREFIX, squirrel_update_exe
 
 logger = logging.getLogger(__name__)
 
 _UPDATE_URL = "https://github.com/sentania-labs/deep-analysis-agent/releases/latest/download"
 
 _CHECK_TIMEOUT = 30
+_DEFAULT_APPLY_TIMEOUT = 120
 
 
 @dataclass(frozen=True)
 class UpdateCheckResult:
     available: bool
     message: str
+    target_version: str | None = None
 
 
 @dataclass(frozen=True)
 class UpdateApplyResult:
-    """Outcome of launching the Squirrel updater.
+    """Outcome of running the Squirrel updater.
 
-    ``started`` is the yes/no the caller usually wants, and truthiness
-    follows it so ``if apply_update():`` still reads naturally. ``reason``
-    and ``update_exe`` exist so a failure is diagnosable from the log,
-    and ``detail`` is the sentence the tray shows the user.
+    ``started`` remains the compatibility-facing success flag, but it is true
+    only after the updater exits successfully. ``detail`` is safe to show in
+    the tray for every outcome.
     """
 
     started: bool
     reason: str
     detail: str
     update_exe: str | None = None
+    exit_code: int | None = None
+    target_version: str | None = None
 
     def __bool__(self) -> bool:
         return self.started
 
 
 def _find_update_exe() -> Path | None:
-    if not getattr(sys, "frozen", False):
-        return None
-    # Frozen exe lives in a versioned subdir; Update.exe is one level up.
-    exe_dir = Path(sys.executable).resolve().parent
-    candidate = exe_dir.parent / "Update.exe"
-    return candidate if candidate.is_file() else None
+    """Compatibility alias for the shared Squirrel discovery helper."""
+    return squirrel_update_exe()
+
+
+def _parse_check_output(stdout: str) -> dict[str, Any] | None:
+    """Return the final JSON object emitted after Squirrel progress lines."""
+    for line in reversed(stdout.splitlines()):
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
 
 
 def check_for_update(current_version: str) -> UpdateCheckResult:
@@ -86,19 +100,47 @@ def check_for_update(current_version: str) -> UpdateCheckResult:
             message=f"Update check failed (exit {proc.returncode}).",
         )
 
-    if not stdout:
+    info = _parse_check_output(stdout)
+    if info is None:
+        logger.warning("update_check_invalid_output stdout=%s", stdout)
+        return UpdateCheckResult(
+            available=False,
+            message="Update check returned an unexpected response. See Open Log.",
+        )
+
+    releases = info.get("releasesToApply")
+    if not isinstance(releases, list):
+        logger.warning("update_check_invalid_releases info=%s", info)
+        return UpdateCheckResult(
+            available=False,
+            message="Update check returned an unexpected response. See Open Log.",
+        )
+    if not releases:
         return UpdateCheckResult(
             available=False,
             message=f"You're up to date (v{current_version}).",
         )
 
+    target_version = info.get("futureVersion")
+    if not isinstance(target_version, str) or not target_version.strip():
+        logger.warning("update_check_missing_target_version info=%s", info)
+        return UpdateCheckResult(
+            available=False,
+            message="Update check could not determine the target version. See Open Log.",
+        )
+
+    target_version = target_version.strip()
     return UpdateCheckResult(
         available=True,
-        message="An update is available. It will install on next restart.",
+        message=f"Update v{target_version} is available.",
+        target_version=target_version,
     )
 
 
-def apply_update() -> UpdateApplyResult:
+def apply_update(
+    timeout_seconds: float = _DEFAULT_APPLY_TIMEOUT,
+    target_version: str | None = None,
+) -> UpdateApplyResult:
     update_exe = _find_update_exe()
     if update_exe is None:
         logger.error("update_apply_failed reason=update_exe_missing update_exe=None")
@@ -109,9 +151,10 @@ def apply_update() -> UpdateApplyResult:
                 "The updater (Update.exe) was not found next to the app. "
                 "Reinstall from the latest GitHub release."
             ),
+            target_version=target_version,
         )
     try:
-        subprocess.Popen(
+        proc = subprocess.Popen(
             [str(update_exe), f"--update={_UPDATE_URL}"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -130,11 +173,75 @@ def apply_update() -> UpdateApplyResult:
                 "or install the latest GitHub release manually."
             ),
             update_exe=str(update_exe),
+            target_version=target_version,
         )
-    logger.info("update_apply_started update_exe=%s", update_exe)
+    try:
+        exit_code = proc.wait(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        logger.warning(
+            "update_apply_timeout update_exe=%s timeout_seconds=%s",
+            update_exe,
+            timeout_seconds,
+        )
+        return UpdateApplyResult(
+            started=False,
+            reason="timeout",
+            detail=(
+                f"Update timed out after {timeout_seconds:g} seconds and may still be running. "
+                "See Open Log before restarting."
+            ),
+            update_exe=str(update_exe),
+            target_version=target_version,
+        )
+
+    if exit_code != 0:
+        logger.warning(
+            "update_apply_nonzero update_exe=%s returncode=%d",
+            update_exe,
+            exit_code,
+        )
+        return UpdateApplyResult(
+            started=False,
+            reason="exit_nonzero",
+            detail=f"Update failed (exit {exit_code}). See Open Log for details.",
+            update_exe=str(update_exe),
+            exit_code=exit_code,
+            target_version=target_version,
+        )
+
+    if target_version is not None:
+        target_dir = update_exe.parent / f"{SQUIRREL_APP_DIR_PREFIX}{target_version}"
+        target_ready = target_dir.is_dir() and not (target_dir / ".not-finished").exists()
+        if not target_ready:
+            logger.error(
+                "update_apply_target_missing update_exe=%s target_version=%s target_dir=%s",
+                update_exe,
+                target_version,
+                target_dir,
+            )
+            return UpdateApplyResult(
+                started=False,
+                reason="target_not_installed",
+                detail=(
+                    f"Update.exe exited successfully, but v{target_version} was not installed. "
+                    "See Open Log for details."
+                ),
+                update_exe=str(update_exe),
+                exit_code=0,
+                target_version=target_version,
+            )
+
+    logger.info(
+        "update_apply_completed update_exe=%s returncode=0 target_version=%s",
+        update_exe,
+        target_version,
+    )
+    version_detail = f" v{target_version}" if target_version is not None else ""
     return UpdateApplyResult(
         started=True,
-        reason="started",
-        detail="The update will install on next restart.",
+        reason="completed",
+        detail=f"Update{version_detail} installed successfully. Restart Deep Analysis to use it.",
         update_exe=str(update_exe),
+        exit_code=0,
+        target_version=target_version,
     )

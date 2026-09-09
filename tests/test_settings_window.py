@@ -59,6 +59,25 @@ def test_validate_form_rejects_negative_heartbeat() -> None:
     assert err is not None
 
 
+def test_validate_form_rejects_update_timeout_outside_bounds() -> None:
+    assert (
+        validate_form(
+            url="https://example.com",
+            heartbeat_interval=60,
+            update_timeout=0,
+        )
+        is not None
+    )
+    assert (
+        validate_form(
+            url="https://example.com",
+            heartbeat_interval=60,
+            update_timeout=3601,
+        )
+        is not None
+    )
+
+
 def test_build_config_updates_editable_fields() -> None:
     original = AppConfig()
     original.agent.agent_id = "ag-1"
@@ -73,6 +92,7 @@ def test_build_config_updates_editable_fields() -> None:
         tls_verify=False,
         machine_name="bench-7",
         heartbeat_interval=120,
+        update_timeout=240,
         log_dir="/tmp/mtgo-logs",
         log_level="DEBUG",
         log_format="json",
@@ -83,6 +103,7 @@ def test_build_config_updates_editable_fields() -> None:
     assert new.server.tls_verify is False
     assert new.agent.machine_name == "bench-7"
     assert new.agent.heartbeat_interval_seconds == 120
+    assert new.agent.update_timeout_seconds == 240
     assert new.mtgo.log_dir == Path("/tmp/mtgo-logs")
     assert new.logging.level == "DEBUG"
     assert new.logging.format == "json"
@@ -143,6 +164,7 @@ def _fully_populated_config() -> AppConfig:
     cfg.agent.api_token = "tok-full"
     cfg.agent.registered_at = datetime(2026, 2, 3, 4, 5, 6)
     cfg.agent.heartbeat_interval_seconds = 999
+    cfg.agent.update_timeout_seconds = 333
 
     cfg.mtgo.log_dir = Path("/old/mtgo/logs")
     cfg.mtgo.watched_suffixes = [".dat", ".xml", ".csv"]
@@ -198,6 +220,7 @@ EDITABLE_PATHS = frozenset(
         "server.tls_verify",
         "agent.machine_name",
         "agent.heartbeat_interval_seconds",
+        "agent.update_timeout_seconds",
         "mtgo.log_dir",
         "logging.level",
         "logging.stderr",
