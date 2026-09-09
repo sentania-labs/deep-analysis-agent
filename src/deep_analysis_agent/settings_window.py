@@ -1,10 +1,10 @@
-"""Settings window — tkinter UI for editing AppConfig.
+"""Settings window: tkinter UI for editing AppConfig.
 
 Opens from the tray 'Settings' menu item. Runs in its own thread so
 the tkinter mainloop doesn't interfere with pystray's event loop. On
 Save, validates fields, writes config atomically (DPAPI-wrapping the
-api_token), and invokes an ``on_save`` callback so the tray can hot-
-reload without restart.
+api_token), and invokes an ``on_save`` callback for runtime reload.
+Restart requirements are documented in docs/settings-reference.md.
 """
 
 from __future__ import annotations

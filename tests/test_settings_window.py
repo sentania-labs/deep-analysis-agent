@@ -616,10 +616,10 @@ def test_save_card_data_restart_notice(
                 str(invalid_bundle)
             )
         for call in tk.ttk.Checkbutton.call_args_list:
-            if (
-                call.kwargs.get("text") == "Upload MTGO card data"
-                and change in {"enable", "disable"}
-            ):
+            if call.kwargs.get("text") == "Upload MTGO card data" and change in {
+                "enable",
+                "disable",
+            }:
                 call.kwargs["variable"].set(change == "enable")
             if (
                 call.kwargs.get("text") == "Auto-detect from MTGO log directory"
