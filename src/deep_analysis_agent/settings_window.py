@@ -44,14 +44,12 @@ def normalize_server_url(value: str) -> str:
     return f"https://{value}"
 
 
-def validate_form(*, url: str, heartbeat_interval: int, update_timeout: int = 120) -> str | None:
+def validate_form(*, url: str, heartbeat_interval: int) -> str | None:
     """Return an error message if the form is invalid, else None."""
     if not url.strip():
         return "Server URL is required."
     if heartbeat_interval <= 0:
         return "Heartbeat interval must be a positive integer (seconds)."
-    if not 1 <= update_timeout <= 3600:
-        return "Update timeout must be between 1 and 3600 seconds."
     return None
 
 
@@ -75,7 +73,6 @@ def build_config(
     tls_verify: bool,
     machine_name: str,
     heartbeat_interval: int,
-    update_timeout: int | None = None,
     log_dir: str,
     log_level: str,
     log_format: str,
@@ -97,11 +94,6 @@ def build_config(
             original.agent,
             machine_name=machine_name.strip(),
             heartbeat_interval_seconds=heartbeat_interval,
-            update_timeout_seconds=(
-                update_timeout
-                if update_timeout is not None
-                else original.agent.update_timeout_seconds
-            ),
         ),
         mtgo=_updated(
             original.mtgo,
@@ -203,7 +195,6 @@ class SettingsWindow:
         tls_var = tk.BooleanVar(value=tls_default)
         machine_var = tk.StringVar(value=cfg.agent.machine_name)
         heartbeat_var = tk.IntVar(value=max(1, int(cfg.agent.heartbeat_interval_seconds)))
-        update_timeout_var = tk.IntVar(value=max(1, int(cfg.agent.update_timeout_seconds)))
         autostart_var = tk.BooleanVar(value=autostart.is_enabled())
         agent_id_text = cfg.agent.agent_id or "(not registered)"
         log_dir_var = tk.StringVar(value=str(cfg.mtgo.log_dir))
@@ -246,13 +237,6 @@ class SettingsWindow:
             row=row, column=0, sticky="w", padx=(0, 8)
         )
         ttk.Spinbox(frame, from_=1, to=86400, textvariable=heartbeat_var, width=8).grid(
-            row=row, column=1, sticky="w", pady=2
-        )
-        row += 1
-        ttk.Label(frame, text="Update timeout (s):").grid(
-            row=row, column=0, sticky="w", padx=(0, 8)
-        )
-        ttk.Spinbox(frame, from_=1, to=3600, textvariable=update_timeout_var, width=8).grid(
             row=row, column=1, sticky="w", pady=2
         )
         row += 1
@@ -329,20 +313,15 @@ class SettingsWindow:
         def _save() -> None:
             try:
                 heartbeat = int(heartbeat_var.get())
-                update_timeout = int(update_timeout_var.get())
             except (ValueError, tk.TclError):
                 messagebox.showerror(
                     "Invalid input",
-                    "Heartbeat interval and update timeout must be positive integers.",
+                    "Heartbeat interval must be a positive integer.",
                     parent=root,
                 )
                 return
 
-            err = validate_form(
-                url=url_var.get(),
-                heartbeat_interval=heartbeat,
-                update_timeout=update_timeout,
-            )
+            err = validate_form(url=url_var.get(), heartbeat_interval=heartbeat)
             if err is not None:
                 messagebox.showerror("Invalid input", err, parent=root)
                 return
@@ -353,7 +332,6 @@ class SettingsWindow:
                 tls_verify=bool(tls_var.get()),
                 machine_name=machine_var.get(),
                 heartbeat_interval=heartbeat,
-                update_timeout=update_timeout,
                 log_dir=log_dir_var.get(),
                 log_level=log_level_var.get(),
                 log_format=log_format_var.get(),

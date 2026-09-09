@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 _UPDATE_URL = "https://github.com/sentania-labs/deep-analysis-agent/releases/latest/download"
 
 _CHECK_TIMEOUT = 30
-_DEFAULT_APPLY_TIMEOUT = 120
+_APPLY_TIMEOUT = 120
 
 
 @dataclass(frozen=True)
@@ -138,7 +138,6 @@ def check_for_update(current_version: str) -> UpdateCheckResult:
 
 
 def apply_update(
-    timeout_seconds: float = _DEFAULT_APPLY_TIMEOUT,
     target_version: str | None = None,
 ) -> UpdateApplyResult:
     update_exe = _find_update_exe()
@@ -176,18 +175,18 @@ def apply_update(
             target_version=target_version,
         )
     try:
-        exit_code = proc.wait(timeout=timeout_seconds)
+        exit_code = proc.wait(timeout=_APPLY_TIMEOUT)
     except subprocess.TimeoutExpired:
         logger.warning(
             "update_apply_timeout update_exe=%s timeout_seconds=%s",
             update_exe,
-            timeout_seconds,
+            _APPLY_TIMEOUT,
         )
         return UpdateApplyResult(
             started=False,
             reason="timeout",
             detail=(
-                f"Update timed out after {timeout_seconds:g} seconds and may still be running. "
+                f"Update timed out after {_APPLY_TIMEOUT:g} seconds and may still be running. "
                 "See Open Log before restarting."
             ),
             update_exe=str(update_exe),

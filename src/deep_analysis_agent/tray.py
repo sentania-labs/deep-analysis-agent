@@ -291,7 +291,6 @@ class TrayIcon:
                     from .updater import apply_update
 
                     applied = apply_update(
-                        timeout_seconds=self._config.agent.update_timeout_seconds,
                         target_version=result.target_version,
                     )
                     logger.info(

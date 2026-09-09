@@ -177,30 +177,31 @@ def test_apply_update_reports_nonzero_exit(tmp_path: Path) -> None:
         patch("deep_analysis_agent.updater._find_update_exe", return_value=fake_exe),
         patch("subprocess.Popen", return_value=child),
     ):
-        result = apply_update(timeout_seconds=45)
+        result = apply_update()
 
     assert result.started is False
     assert result.reason == "exit_nonzero"
     assert result.exit_code == 23
     assert "exit 23" in result.detail
-    child.wait.assert_called_once_with(timeout=45)
+    child.wait.assert_called_once_with(timeout=120)
 
 
 def test_apply_update_reports_timeout(tmp_path: Path) -> None:
     fake_exe = tmp_path / "Update.exe"
     child = MagicMock()
-    child.wait.side_effect = subprocess.TimeoutExpired(cmd="Update.exe", timeout=9)
+    child.wait.side_effect = subprocess.TimeoutExpired(cmd="Update.exe", timeout=120)
     with (
         patch("deep_analysis_agent.updater._find_update_exe", return_value=fake_exe),
         patch("subprocess.Popen", return_value=child),
     ):
-        result = apply_update(timeout_seconds=9)
+        result = apply_update()
 
     assert result.started is False
     assert result.reason == "timeout"
     assert result.exit_code is None
-    assert "9 seconds" in result.detail
+    assert "120 seconds" in result.detail
     assert "may still be running" in result.detail
+    child.wait.assert_called_once_with(timeout=120)
 
 
 def test_apply_update_logs_resolved_path_and_reason(

@@ -105,7 +105,7 @@ def test_successful_apply_keeps_the_check_message(
     assert "installed successfully" in final
 
 
-def test_tray_passes_configured_timeout_and_target(
+def test_tray_passes_target_version(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     seen: list[dict[str, Any]] = []
@@ -124,7 +124,6 @@ def test_tray_passes_configured_timeout_and_target(
 
     monkeypatch.setattr(updater_mod, "apply_update", _apply)
     config = AppConfig()
-    config.agent.update_timeout_seconds = 275
     fake_icon = MagicMock()
     icon = tray_mod.TrayIcon(config=config, version="0.6.3")
     icon._icon = fake_icon
@@ -135,7 +134,7 @@ def test_tray_passes_configured_timeout_and_target(
             thread.join(timeout=10)
             assert not thread.is_alive()
 
-    assert seen == [{"timeout_seconds": 275, "target_version": "0.7.0"}]
+    assert seen == [{"target_version": "0.7.0"}]
 
 
 def test_no_update_available_never_calls_apply(monkeypatch: pytest.MonkeyPatch) -> None:
