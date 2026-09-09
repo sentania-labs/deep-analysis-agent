@@ -26,7 +26,7 @@ def test_headless_entry_writes_terminal_notifications(
     monkeypatch.setattr(updater, "_UPDATE_URL", updater._UPDATE_URL)
 
     def check(version: str) -> UpdateCheckResult:
-        assert updater._UPDATE_URL == str(tmp_path.resolve())
+        assert str(tmp_path.resolve()) == updater._UPDATE_URL
         if outcome == "exception":
             raise ValueError("unexpected check failure")
         return UpdateCheckResult(outcome == "success", "Already current.", "0.0.2")
