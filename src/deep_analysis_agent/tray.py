@@ -278,21 +278,33 @@ class TrayIcon:
                 logger.exception("tray notify failed")
 
         def _run() -> None:
-            result = check_for_update(self._version)
-            logger.info("update_check_done available=%s msg=%s", result.available, result.message)
-            msg = result.message
-            if result.available:
-                from .updater import apply_update
-
-                applied = apply_update()
+            try:
+                result = check_for_update(self._version)
                 logger.info(
-                    "update_apply_done started=%s reason=%s update_exe=%s",
-                    applied.started,
-                    applied.reason,
-                    applied.update_exe,
+                    "update_check_done available=%s target_version=%s msg=%s",
+                    result.available,
+                    result.target_version,
+                    result.message,
                 )
-                if not applied.started:
-                    msg = f"Update could not be started. {applied.detail}"
+                msg = result.message
+                if result.available:
+                    from .updater import apply_update
+
+                    applied = apply_update(
+                        target_version=result.target_version,
+                    )
+                    logger.info(
+                        "update_apply_done started=%s reason=%s exit_code=%s update_exe=%s",
+                        applied.started,
+                        applied.reason,
+                        applied.exit_code,
+                        applied.update_exe,
+                    )
+                    msg = applied.detail
+            except Exception:
+                logger.exception("update_check_unexpected_failure")
+                msg = "Update check failed, see Open Log"
+
             if self._icon is not None:
                 try:
                     self._icon.notify(msg[:256], "Deep Analysis")

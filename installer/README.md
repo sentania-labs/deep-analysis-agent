@@ -16,7 +16,8 @@ This directory will hold the NuGet spec and Squirrel build configuration for the
 
 ## Self-update flow
 
-Squirrel installs to `%LOCALAPPDATA%\DeepAnalysis\` (per-user, no UAC). At next launch after a new GitHub Release, Squirrel's `UpdateManager` fetches the `RELEASES` manifest, downloads the delta package, and applies the update. The old process is replaced cleanly — no temp-dir issues, no manual restart logic needed in the Python code.
+See [Updates](../README.md#installation) for user instructions and the
+[installer architecture](../docs/installer-architecture.md#update-flow) for the update contract.
 
 ## Status
 

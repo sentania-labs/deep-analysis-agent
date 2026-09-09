@@ -940,6 +940,10 @@ async def _async_main() -> int:
 
 
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "--updater-e2e":
+        from .updater_e2e import run
+
+        sys.exit(run(sys.argv[2:]))
     if len(sys.argv) > 1 and sys.argv[1] == "--version":
         print(f"DeepAnalysisAgent {__version__}")
         sys.exit(0)

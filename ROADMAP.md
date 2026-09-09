@@ -12,12 +12,8 @@ _All items shipped in v0.4.10._
 
 ### 1. Manual update check actually checks
 
-The "Check for Updates" tray menu item currently shows a dismissive notification ("Squirrel checks for updates on startup and daily — no manual check needed"). It should invoke Squirrel's update check and report the result: "Up to date (v0.4.7)" or "Update available — installing on next restart."
+See [Updates](README.md#installation) for the current user workflow and outcomes.
 
-- **Acceptance criteria:**
-  - Clicking "Check for Updates" triggers a real Squirrel update check
-  - Tray notification reports the outcome (up to date / update found / check failed)
-  - Non-blocking — runs in background, doesn't freeze the tray
 - **Status:** Done (v0.4.10)
 
 ### 2. Pause sync

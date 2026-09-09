@@ -9,7 +9,7 @@ The agent runs silently in your system tray, monitors your MTGO log directory, a
 - Watches your MTGO log directory for new `.dat` / `.log` files
 - Detects match-complete events and ships raw log files to the server
 - Deduplicates uploads by SHA-256 so retries are safe
-- Self-updates silently via Squirrel.Windows (no UAC prompts, no manual installs)
+- Updates through the tray via Squirrel.Windows (no UAC prompts)
 - Tray icon cycles through WUBRG mana colors while uploading; returns to colorless (C) when idle
 
 ## Installation
@@ -20,7 +20,17 @@ Squirrel installs the agent silently to `%LOCALAPPDATA%\DeepAnalysisAgent\` — 
 
 **First run:** the Deep Analysis tray icon will appear. Right-click → Settings to paste your registration code. Get a code from your server admin (or generate one via the admin UI).
 
-**Auto-updates:** on each startup, the agent checks for a newer release. Updates install silently in the background.
+**Updates:** right-click the tray icon and select **Check for Updates**. The agent
+checks for a release and, if available, runs the installer in the background.
+Wait for the result notification: success means the update is installed and you
+must restart Deep Analysis to use it. If no release is available, the tray reports
+that you are up to date, or asks you to restart if the installed version differs
+from the running build. Startup alone does not trigger an update check.
+
+A failed or incomplete installation reports failure. If the installation wait
+times out, the updater may still be running; use **Open Log** before restarting.
+Unexpected errors also produce a failure notification directing you to **Open Log**.
+See [Update flow](docs/installer-architecture.md#update-flow) for verification details.
 
 **Uninstall:** via Windows Settings → Apps → Deep Analysis Agent, or run `%LOCALAPPDATA%\DeepAnalysisAgent\Update.exe --uninstall`.
 

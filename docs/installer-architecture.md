@@ -36,16 +36,33 @@ Python source
 
 ## Update flow
 
-On each launch, the agent's embedded `Update.exe` checks the GitHub Release `RELEASES` file against the local version. If a newer version exists:
-1. Download the delta NuGet package.
-2. Extract to a new versioned app directory under `%LOCALAPPDATA%\DeepAnalysisAgent\`.
-3. On next launch, Update.exe swaps to the new version.
-4. The old version directory is cleaned up.
+For the user workflow and notifications, see [Updates](../README.md#installation).
+The tray worker calls `updater.check_for_update()`, then `apply_update()` only
+when Squirrel reports releases to apply and a nonempty target version.
+
+1. `Update.exe --checkForUpdate` checks the GitHub latest-release feed with a
+   30-second timeout. The agent reads the final JSON object after progress lines,
+   using `releasesToApply` and `futureVersion`. With no releases to apply,
+   `currentVersion` identifies an installed version different from the running build.
+2. `Update.exe --update` applies the release. The agent waits for at most the
+   fixed 120-second timeout; timing out does not terminate the updater.
+3. Success requires exit code zero and, when a target version was supplied,
+   readable before/after inventories of `app-*` directories. The target directory
+   must exist without a `.not-finished` marker. If the target is absent, the agent
+   accepts a newly ready version from this update, choosing the most recently
+   written directory if there are several. This accommodates a feed advancing
+   between check and apply. Starting the process alone is not success. This
+   verifies installation state, not a successful launch of the new build.
+4. Restart through the stable Squirrel entry point to run the installed version.
+   Squirrel manages cleanup of old version directories.
+
+Updater and autostart discovery share `paths.squirrel_update_exe()`;
+`updater._find_update_exe()` is a compatibility alias.
 
 ## Autostart and the stable entry point
 
 Because the running exe lives inside a versioned `app-<version>` directory
-that step 4 deletes, nothing that must survive an update may record that
+that Squirrel can clean up, nothing that must survive an update may record that
 path. The Windows Run key therefore stores the Squirrel entry point:
 
 ```text
