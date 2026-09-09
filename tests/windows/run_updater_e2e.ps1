@@ -62,19 +62,30 @@ function New-StalledUpdateExe {
     )
 
     $Source = @"
+using System;
 using System.Threading;
 
 public static class Program
 {
     public static int Main(string[] args)
     {
-        Thread.Sleep(2000);
+        if (args.Length == 1 && args[0].StartsWith("--checkForUpdate="))
+        {
+            Console.WriteLine(@"{""currentVersion"":""0.0.1"",""futureVersion"":""0.0.2"",""releasesToApply"":[{""version"":""0.0.2""}]}");
+            return 0;
+        }
+        Thread.Sleep(125000);
         return 0;
     }
 }
 "@
-    Add-Type -TypeDefinition $Source -Language CSharp `
-        -OutputAssembly $OutputPath -OutputType ConsoleApplication
+    $SourcePath = Join-Path $TestRoot "StalledUpdate.cs"
+    Set-Content -Path $SourcePath -Value $Source
+    $Compiler = Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+    & $Compiler /nologo /target:exe "/out:$OutputPath" $SourcePath
+    if ($LASTEXITCODE -ne 0) {
+        throw "Stalled Update.exe compilation failed"
+    }
 }
 
 if (Test-Path $TestRoot) {
@@ -118,10 +129,11 @@ try {
     $CorruptAppRoot = Install-SquirrelPackage `
         -PackId $CorruptPackId -ReleaseDir $CorruptBaseFeed
 
-    $StallAppRoot = Join-Path $LocalAppData "DeepAnalysisAgentE2EStall"
-    $StallAppDir = Join-Path $StallAppRoot "app-0.0.1"
-    New-Item -ItemType Directory -Force -Path $StallAppDir | Out-Null
-    Copy-Item (Join-Path $Payload "DeepAnalysisAgent.exe") $StallAppDir
+    $StallFeed = Join-Path $TestRoot "stall-feed"
+    $StallPackId = "DeepAnalysisAgentE2EStall"
+    Invoke-SquirrelPack -PackId $StallPackId -Version "0.0.1" -ReleaseDir $StallFeed
+    $StallAppRoot = Install-SquirrelPackage -PackId $StallPackId -ReleaseDir $StallFeed
+    Remove-Item (Join-Path $StallAppRoot "Update.exe")
     New-StalledUpdateExe -OutputPath (Join-Path $StallAppRoot "Update.exe")
 
     $env:DAA_E2E_GOOD_APP_ROOT = $GoodAppRoot
