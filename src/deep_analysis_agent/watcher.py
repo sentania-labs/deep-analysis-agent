@@ -31,7 +31,7 @@ _POLL_INTERVAL = 0.2  # seconds between stability polls
 # stability gate on top of a multi-hour MTGO match: match length + gate
 # + slack. If MTGO/some other process holds the file open writing
 # forever, we abandon the wait rather than blocking the queue.
-_MAX_STABILITY_WAIT = 6 * 60 * 60.0
+MAX_STABILITY_SECONDS = 6 * 60 * 60.0
 
 
 def _tail_scan_conclusive(path: Path) -> bool:
@@ -220,7 +220,7 @@ class LogWatcher:
         # when N already-finalized files are queued (else N × stability).
         if time.time() - prev.st_mtime >= self._stability:
             return True
-        deadline = time.monotonic() + _MAX_STABILITY_WAIT
+        deadline = time.monotonic() + MAX_STABILITY_SECONDS
         last_change = time.monotonic()
         while not self._stop.is_set():
             time.sleep(_POLL_INTERVAL)

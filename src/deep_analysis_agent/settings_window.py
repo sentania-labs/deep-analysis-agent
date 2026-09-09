@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import math
 import ssl
 import subprocess
 import sys
@@ -29,6 +30,7 @@ from .config import (
 )
 from .logging import log_file_path
 from .paths import config_path
+from .watcher import MAX_STABILITY_SECONDS
 
 logger = logging.getLogger(__name__)
 
@@ -72,8 +74,11 @@ def validate_form(
         return "At least one watched file suffix is required."
     if watched_name_globs is not None and not watched_name_globs:
         return "At least one watched name glob is required."
-    if stability_seconds is not None and stability_seconds < _MIN_STABILITY_SECONDS:
-        return "Stability wait must be at least 600 seconds."
+    if stability_seconds is not None and (
+        not math.isfinite(stability_seconds)
+        or not _MIN_STABILITY_SECONDS <= stability_seconds <= MAX_STABILITY_SECONDS
+    ):
+        return "Stability wait must be between 600 and 21600 seconds."
     if (
         card_data_source_enabled
         and not card_data_source_auto_detect
@@ -434,7 +439,7 @@ class SettingsWindow:
         ttk.Spinbox(
             advanced,
             from_=_MIN_STABILITY_SECONDS,
-            to=86400,
+            to=MAX_STABILITY_SECONDS,
             increment=60,
             textvariable=stability_var,
             width=10,

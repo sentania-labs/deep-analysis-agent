@@ -1669,6 +1669,45 @@ async def test_file_modified_after_queueing_is_not_shipped_stale(tmp_path: Path)
         await worker
 
 
+async def test_dequeue_uses_reloaded_stability_wait(tmp_path: Path) -> None:
+    """Queued files use the current setting rather than the startup value."""
+    q: asyncio.Queue[Path] = asyncio.Queue()
+    log = _RecordingLog()
+    tray = _StubTray()
+    handled: list[Path] = []
+    current_stability = 600.0
+
+    queued = tmp_path / "match.dat"
+    queued.write_bytes(b"payload")
+    _age(queued, 900)
+
+    async def handle(path: Path) -> None:
+        handled.append(path)
+
+    worker = asyncio.create_task(
+        main_mod.upload_worker(
+            q,
+            handle,
+            tray,
+            log,
+            None,
+            lambda: current_stability,
+        )  # type: ignore[arg-type]
+    )
+    current_stability = 1200.0
+    q.put_nowait(queued)
+
+    await asyncio.wait_for(q.join(), timeout=5)
+    await _settle()
+
+    assert handled == []
+    assert "upload_deferred_unstable" in log.names()
+
+    worker.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await worker
+
+
 async def test_unstable_file_requeue_is_bounded(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

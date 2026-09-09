@@ -61,6 +61,16 @@ def test_validate_form_rejects_negative_heartbeat() -> None:
     assert err is not None
 
 
+@pytest.mark.parametrize("value", [599.0, 21601.0, float("nan"), float("inf")])
+def test_validate_form_rejects_unsupported_stability_wait(value: float) -> None:
+    err = validate_form(
+        url="https://example.com",
+        heartbeat_interval=60,
+        stability_seconds=value,
+    )
+    assert err == "Stability wait must be between 600 and 21600 seconds."
+
+
 def test_parse_lines_trims_and_drops_empty_lines() -> None:
     assert parse_lines("  .dat\n\n *.xml \n") == [".dat", "*.xml"]
 

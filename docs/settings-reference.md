@@ -20,7 +20,7 @@ ownership explicit.
 | `mtgo.log_dir` | Operator-editable | Log directory | Root searched for MTGO match logs. |
 | `mtgo.watched_suffixes` | Operator-editable | Advanced MTGO, Watched suffixes | Fast file-type filter applied before filename patterns. |
 | `mtgo.watched_name_globs` | Operator-editable | Advanced MTGO, Watched name globs | Filename patterns that select files for upload. |
-| `mtgo.stability_seconds` | Operator-editable | Advanced MTGO, Stability wait | Minimum unchanged period before a match log is uploaded. See input rules below. |
+| `mtgo.stability_seconds` | Operator-editable | Advanced MTGO, Stability wait | Minimum unchanged period before a match log is uploaded. See the supported range below. |
 | `mtgo.card_data_source_dir` | Operator-editable | Advanced MTGO, CardDataSource directory | Directory containing MTGO card catalog XML files. |
 | `mtgo.card_data_source_enabled` | Operator-editable | Advanced MTGO, Upload MTGO card data | Enables or disables card catalog uploads. |
 | `logging.level` | Operator-editable | Logging level | Minimum severity written to the agent log. |
@@ -37,7 +37,7 @@ is registry-backed and is not part of the persisted settings models.
 
 - Enter suffixes and filename globs one per line. Blank lines are ignored.
 - At least one suffix and one filename glob are required.
-- Stability wait cannot be lower than 600 seconds.
+- Stability wait must be between 600 seconds and 6 hours.
 - When card data upload is enabled, use auto-detection or select a
   CardDataSource directory.
 - Disabling card data upload disables its directory controls. An existing

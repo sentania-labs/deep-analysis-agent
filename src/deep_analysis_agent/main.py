@@ -591,7 +591,7 @@ async def upload_worker(
     tray: TrayIcon,
     log: structlog.stdlib.BoundLogger,
     resume_event: asyncio.Event | None = None,
-    stability_seconds: float | None = None,
+    stability_seconds: float | Callable[[], float] | None = None,
 ) -> None:
     """Drain the upload queue one file at a time, reporting real failures.
 
@@ -611,8 +611,9 @@ async def upload_worker(
     held in hand rather than shipped or dropped.
 
     ``stability_seconds`` enables the dequeue-time re-check described in
-    :func:`dequeue_readiness`.  Both are optional so the worker can be
-    exercised with paths that never touch the disk.
+    :func:`dequeue_readiness`. A callable supplies the current setting after
+    a runtime reload. Both forms are optional so the worker can be exercised
+    with paths that never touch the disk.
     """
     held: Path | None = None
     # A held item has not been disposed of yet, so its task_done() travels
@@ -664,8 +665,11 @@ async def upload_worker(
                     log.info("upload_held_paused", path=str(path))
                     continue
 
-                if stability_seconds is not None:
-                    state = dequeue_readiness(path, stability_seconds)
+                current_stability = (
+                    stability_seconds() if callable(stability_seconds) else stability_seconds
+                )
+                if current_stability is not None:
+                    state = dequeue_readiness(path, current_stability)
                     if state == "gone":
                         revalidations.pop(str(path), None)
                         log.info("skip_vanished_before_upload", path=str(path))
@@ -855,7 +859,7 @@ async def _async_main() -> int:
                 tray,
                 log,
                 resume_event,
-                config.mtgo.stability_seconds,
+                lambda: config.mtgo.stability_seconds,
             ),
             name="upload-worker",
         )
