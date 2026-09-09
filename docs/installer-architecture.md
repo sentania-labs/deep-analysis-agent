@@ -42,13 +42,17 @@ when Squirrel reports releases to apply and a nonempty target version.
 
 1. `Update.exe --checkForUpdate` checks the GitHub latest-release feed with a
    30-second timeout. The agent reads the final JSON object after progress lines,
-   using `releasesToApply` and `futureVersion`.
+   using `releasesToApply` and `futureVersion`. With no releases to apply,
+   `currentVersion` identifies an installed version different from the running build.
 2. `Update.exe --update` applies the release. The agent waits for at most the
    fixed 120-second timeout; timing out does not terminate the updater.
 3. Success requires exit code zero and, when a target version was supplied,
-   an `app-<target_version>` directory with no `.not-finished` marker. Starting
-   the process alone is not success. This verifies installation state, not a
-   successful launch of the new build.
+   readable before/after inventories of `app-*` directories. The target directory
+   must exist without a `.not-finished` marker. If the target is absent, the agent
+   accepts a newly ready version from this update, choosing the most recently
+   written directory if there are several. This accommodates a feed advancing
+   between check and apply. Starting the process alone is not success. This
+   verifies installation state, not a successful launch of the new build.
 4. Restart through the stable Squirrel entry point to run the installed version.
    Squirrel manages cleanup of old version directories.
 

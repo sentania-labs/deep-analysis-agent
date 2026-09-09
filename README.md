@@ -24,7 +24,8 @@ Squirrel installs the agent silently to `%LOCALAPPDATA%\DeepAnalysisAgent\` — 
 checks for a release and, if available, runs the installer in the background.
 Wait for the result notification: success means the update is installed and you
 must restart Deep Analysis to use it. If no release is available, the tray reports
-that you are up to date. Startup alone does not trigger an update check.
+that you are up to date, or asks you to restart if the installed version differs
+from the running build. Startup alone does not trigger an update check.
 
 A failed or incomplete installation reports failure. If the installation wait
 times out, the updater may still be running; use **Open Log** before restarting.
