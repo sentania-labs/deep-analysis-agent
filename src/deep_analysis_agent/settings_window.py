@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import ssl
 import subprocess
 import sys
 import threading
@@ -26,6 +27,7 @@ from .config import (
     _default_mtgo_log_dir,
     save_config,
 )
+from .logging import log_file_path
 from .paths import config_path
 
 logger = logging.getLogger(__name__)
@@ -78,6 +80,22 @@ def validate_form(
         and not card_data_source_dir.strip()
     ):
         return "Choose a CardDataSource directory or disable card data uploads."
+    return None
+
+
+def validate_destinations(config: AppConfig) -> str | None:
+    if isinstance(config.server.tls_verify, str):
+        try:
+            ssl.create_default_context(cafile=config.server.tls_verify)
+        except (OSError, ValueError) as exc:
+            return f"Cannot load CA bundle: {exc}"
+    try:
+        target = log_file_path(config)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("a", encoding="utf-8"):
+            pass
+    except (OSError, ValueError) as exc:
+        return f"Cannot open agent.log in the logging directory: {exc}"
     return None
 
 
@@ -522,6 +540,7 @@ class SettingsWindow:
         row += 1
 
         def _save() -> None:
+            save_notice_var.set("")
             try:
                 heartbeat = int(heartbeat_var.get())
             except (ValueError, tk.TclError):
@@ -575,6 +594,10 @@ class SettingsWindow:
                 log_format=log_format_var.get(),
                 log_stderr=bool(log_stderr_var.get()),
             )
+            err = validate_destinations(new_config)
+            if err is not None:
+                validation_var.set(err)
+                return
             try:
                 save_config(new_config)
             except Exception as exc:

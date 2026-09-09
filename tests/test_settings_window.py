@@ -556,9 +556,12 @@ def test_apply_autostart_change_returns_message_on_disable_failure(
     assert "disable" in err.lower()
 
 
-@pytest.mark.parametrize("change", ["enable", "disable", "directory", "auto_detect", "unrelated"])
+@pytest.mark.parametrize(
+    "change",
+    ["enable", "disable", "directory", "auto_detect", "unrelated", "log_error", "ca_error"],
+)
 def test_save_card_data_restart_notice(
-    monkeypatch: pytest.MonkeyPatch, change: str
+    monkeypatch: pytest.MonkeyPatch, change: str, tmp_path: Path
 ) -> None:
     tk = MagicMock()
     tk.TclError = RuntimeError
@@ -590,12 +593,28 @@ def test_save_card_data_restart_notice(
     monkeypatch.setattr(settings_window_mod, "save_config", save)
     cfg = AppConfig()
     cfg.server.url = "https://example.test"
+    cfg.logging.log_dir = tmp_path / "logs"
+    if change == "ca_error":
+        cfg.server.tls_verify = str(tmp_path / "original.pem")
     cfg.mtgo.card_data_source_enabled = change != "enable"
     cfg.mtgo.card_data_source_dir = Path("old-cards")
+    original = cfg.model_dump()
     reload_callback = MagicMock()
     notices: list[str] = []
 
     def interact() -> None:
+        if change == "log_error":
+            invalid_dir = tmp_path / "blocked"
+            invalid_dir.write_text("This is a file, not a directory.")
+            next(var for var in variables if var.get() == str(tmp_path / "logs")).set(
+                str(invalid_dir)
+            )
+        if change == "ca_error":
+            invalid_bundle = tmp_path / "invalid.der"
+            invalid_bundle.write_bytes(b"\x30\x82invalid certificate")
+            next(var for var in variables if var.get() == cfg.server.tls_verify).set(
+                str(invalid_bundle)
+            )
         for call in tk.ttk.Checkbutton.call_args_list:
             if (
                 call.kwargs.get("text") == "Upload MTGO card data"
@@ -624,6 +643,15 @@ def test_save_card_data_restart_notice(
     root.mainloop.side_effect = interact
     SettingsWindow(cfg, on_save=reload_callback)._run()
 
+    if change in {"log_error", "ca_error"}:
+        save.assert_not_called()
+        reload_callback.assert_not_called()
+        root.destroy.assert_not_called()
+        assert cfg.model_dump() == original
+        error = "Cannot load CA bundle:" if change == "ca_error" else "Cannot open agent.log"
+        assert any(notice.startswith(error) for notice in notices)
+        assert not any(notice.startswith("Settings saved.") for notice in notices)
+        return
     save.assert_called_once()
     reload_callback.assert_called_once_with()
     tk.messagebox.showerror.assert_not_called()
@@ -643,3 +671,33 @@ def test_save_card_data_restart_notice(
         assert saved.mtgo.card_data_source_dir == Path("new-cards")
     elif change == "auto_detect":
         assert saved.mtgo.card_data_source_dir is None
+
+
+@pytest.mark.parametrize("existing_log", [False, True])
+def test_validate_destinations_accepts_pem_and_writable_log(
+    tmp_path: Path, existing_log: bool
+) -> None:
+    import certifi
+
+    cfg = AppConfig()
+    cfg.server.tls_verify = certifi.where()
+    cfg.logging.log_dir = tmp_path / "logs"
+    target = cfg.logging.log_dir / "agent.log"
+    if existing_log:
+        target.parent.mkdir()
+        target.write_text("existing log data", encoding="utf-8")
+    assert settings_window_mod.validate_destinations(cfg) is None
+    assert target.read_text(encoding="utf-8") == ("existing log data" if existing_log else "")
+
+
+def test_validate_destinations_rejects_unwritable_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = AppConfig()
+    cfg.logging.log_dir = tmp_path
+    open_log = MagicMock(side_effect=PermissionError("Access denied"))
+    monkeypatch.setattr(Path, "open", open_log)
+    error = settings_window_mod.validate_destinations(cfg)
+    assert error is not None
+    assert error.startswith("Cannot open agent.log")
+    open_log.assert_called_once_with("a", encoding="utf-8")
