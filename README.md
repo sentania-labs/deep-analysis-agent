@@ -6,7 +6,7 @@ The agent runs silently in your system tray, monitors your MTGO log directory, a
 
 ## What it does
 
-- Watches your MTGO log directory for new `.dat` / `.log` files
+- Watches your MTGO log directory using [configurable file filters](docs/settings-reference.md#advanced-mtgo-input-rules)
 - Detects match-complete events and ships raw log files to the server
 - Deduplicates uploads by SHA-256 so retries are safe
 - Updates through the tray via Squirrel.Windows (no UAC prompts)

@@ -30,7 +30,7 @@ sanctioned cross-system channel.
 | File watching | watchdog |
 | HTTP client | httpx (async) |
 | Config | Pydantic v2 (BaseSettings, TOML config file) |
-| Logging | Python structlog (JSON formatter) |
+| Logging | Python structlog |
 | Packaging | PyInstaller (single-file exe) |
 | Distribution / self-update | Squirrel.Windows (see [update flow](docs/installer-architecture.md#update-flow)) |
 | Server client types | OpenAPI-generated from deep-analysis-server repo |
@@ -91,7 +91,7 @@ Cross-platform is explicitly out of scope. Don't add platform guards, shims, or 
 
 - **Type hints everywhere.** No untyped function signatures.
 - **Pydantic v2 for config.** `BaseSettings` backed by a TOML config file at `%LOCALAPPDATA%\DeepAnalysis\config.toml`. Environment variable overrides for testing.
-- **Structured logging.** Use `structlog` with JSON formatter. Log level configurable via config.
+- **Structured logging.** Use `structlog`; operator controls are documented in the [settings reference](docs/settings-reference.md#logging-and-tls-validation).
 - **Terse naming conventions.** Short, clear names. No Hungarian notation, no excessive prefixes.
 - **Tests in `tests/`.** Unit tests for pure logic (dedup, config parsing, stability checks). Integration tests are optional and not required pre-ship for v0.4.0.
 - **Code review protocol:** for non-trivial changes, spawn a subagent to self-review before committing.
