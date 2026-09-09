@@ -18,6 +18,7 @@ from deep_analysis_agent.settings_window import (
     apply_autostart_change,
     build_config,
     normalize_server_url,
+    parse_lines,
     validate_form,
 )
 
@@ -59,6 +60,79 @@ def test_validate_form_rejects_negative_heartbeat() -> None:
     assert err is not None
 
 
+def test_parse_lines_trims_and_drops_empty_lines() -> None:
+    assert parse_lines("  .dat\n\n *.xml \n") == [".dat", "*.xml"]
+
+
+def test_validate_form_rejects_empty_watched_name_globs() -> None:
+    err = validate_form(
+        url="https://example.com",
+        heartbeat_interval=60,
+        watched_name_globs=[],
+    )
+    assert err == "At least one watched name glob is required."
+
+
+def test_validate_form_rejects_enabled_card_data_without_directory() -> None:
+    err = validate_form(
+        url="https://example.com",
+        heartbeat_interval=60,
+        card_data_source_enabled=True,
+        card_data_source_dir="  ",
+    )
+    assert err == "Choose a CardDataSource directory or disable card data uploads."
+
+
+def test_validate_form_accepts_disabled_card_data_without_directory() -> None:
+    assert (
+        validate_form(
+            url="https://example.com",
+            heartbeat_interval=60,
+            card_data_source_enabled=False,
+            card_data_source_dir="",
+        )
+        is None
+    )
+
+
+def test_validate_form_accepts_enabled_card_data_with_auto_detect() -> None:
+    assert (
+        validate_form(
+            url="https://example.com",
+            heartbeat_interval=60,
+            card_data_source_enabled=True,
+            card_data_source_auto_detect=True,
+            card_data_source_dir="",
+        )
+        is None
+    )
+
+
+def _form_values(original: AppConfig) -> dict[str, Any]:
+    """Return form values that preserve every operator-editable setting."""
+    raw_tls = original.server.tls_verify
+    return {
+        "server_url": original.server.url,
+        "tls_verify": bool(raw_tls),
+        "tls_ca_bundle": raw_tls if isinstance(raw_tls, str) else "",
+        "machine_name": original.agent.machine_name,
+        "heartbeat_interval": original.agent.heartbeat_interval_seconds,
+        "log_dir": str(original.mtgo.log_dir),
+        "watched_suffixes": original.mtgo.watched_suffixes,
+        "watched_name_globs": original.mtgo.watched_name_globs,
+        "stability_seconds": original.mtgo.stability_seconds,
+        "card_data_source_enabled": original.mtgo.card_data_source_enabled,
+        "card_data_source_auto_detect": original.mtgo.card_data_source_dir is None,
+        "card_data_source_dir": (
+            str(original.mtgo.card_data_source_dir) if original.mtgo.card_data_source_dir else ""
+        ),
+        "log_level": original.logging.level,
+        "logging_dir": str(original.logging.log_dir) if original.logging.log_dir else "",
+        "log_format": original.logging.format,
+        "log_stderr": original.logging.stderr,
+    }
+
+
 def test_build_config_updates_editable_fields() -> None:
     original = AppConfig()
     original.agent.agent_id = "ag-1"
@@ -71,10 +145,18 @@ def test_build_config_updates_editable_fields() -> None:
         original,
         server_url="https://new.example",
         tls_verify=False,
+        tls_ca_bundle="",
         machine_name="bench-7",
         heartbeat_interval=120,
         log_dir="/tmp/mtgo-logs",
+        watched_suffixes=[".dat", ".xml"],
+        watched_name_globs=["Match_GameLog_*.dat", "grouping *.xml"],
+        stability_seconds=1200.0,
+        card_data_source_enabled=True,
+        card_data_source_auto_detect=False,
+        card_data_source_dir="/tmp/cards",
         log_level="DEBUG",
+        logging_dir="/tmp/logs",
         log_format="json",
         log_stderr=False,
     )
@@ -84,7 +166,13 @@ def test_build_config_updates_editable_fields() -> None:
     assert new.agent.machine_name == "bench-7"
     assert new.agent.heartbeat_interval_seconds == 120
     assert new.mtgo.log_dir == Path("/tmp/mtgo-logs")
+    assert new.mtgo.watched_suffixes == [".dat", ".xml"]
+    assert new.mtgo.watched_name_globs == ["Match_GameLog_*.dat", "grouping *.xml"]
+    assert new.mtgo.stability_seconds == 1200.0
+    assert new.mtgo.card_data_source_enabled is True
+    assert new.mtgo.card_data_source_dir == Path("/tmp/cards")
     assert new.logging.level == "DEBUG"
+    assert new.logging.log_dir == Path("/tmp/logs")
     assert new.logging.format == "json"
     assert new.logging.stderr is False
 
@@ -98,17 +186,9 @@ def test_build_config_carries_forward_secrets_and_unedited_fields() -> None:
     original.mtgo.stability_seconds = 750.0
     original.logging.log_dir = Path("/var/log/da-custom")
 
-    new = build_config(
-        original,
-        server_url="https://new.example",
-        tls_verify=True,
-        machine_name="bench-1",
-        heartbeat_interval=60,
-        log_dir="/tmp/mtgo",
-        log_level="INFO",
-        log_format="plaintext",
-        log_stderr=True,
-    )
+    form = _form_values(original)
+    form.update(server_url="https://new.example", machine_name="bench-1")
+    new = build_config(original, **form)
 
     assert new.agent.agent_id == "ag-keep"
     assert new.agent.api_token == "tok-keep"
@@ -161,24 +241,16 @@ def _fully_populated_config() -> AppConfig:
 
 def _save_with_unrelated_edit(original: AppConfig) -> AppConfig:
     """Save the settings form changing only the machine name."""
-    return build_config(
-        original,
-        server_url=original.server.url,
-        tls_verify=bool(original.server.tls_verify),
-        machine_name="renamed-bench",
-        heartbeat_interval=original.agent.heartbeat_interval_seconds,
-        log_dir=str(original.mtgo.log_dir),
-        log_level=original.logging.level,
-        log_format=original.logging.format,
-        log_stderr=original.logging.stderr,
-    )
+    form = _form_values(original)
+    form["machine_name"] = "renamed-bench"
+    return build_config(original, **form)
 
 
-def test_build_config_preserves_watched_globs_and_card_data_source(
+def test_build_config_preserves_advanced_mtgo_values_during_unrelated_edit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Regression for #38: fields with no UI must survive an unrelated save."""
+    """Advanced MTGO fields survive when an operator edits another section."""
     _isolate_config_sources(monkeypatch, tmp_path)
     original = _fully_populated_config()
 
@@ -199,11 +271,61 @@ EDITABLE_PATHS = frozenset(
         "agent.machine_name",
         "agent.heartbeat_interval_seconds",
         "mtgo.log_dir",
+        "mtgo.watched_suffixes",
+        "mtgo.watched_name_globs",
+        "mtgo.stability_seconds",
+        "mtgo.card_data_source_dir",
+        "mtgo.card_data_source_enabled",
         "logging.level",
+        "logging.log_dir",
         "logging.stderr",
         "logging.format",
     }
 )
+
+INTERNAL_PATHS = frozenset(
+    {
+        "agent.agent_id",
+        "agent.api_token",
+        "agent.registered_at",
+    }
+)
+
+
+def test_settings_audit_classifies_every_persisted_model_field(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every persisted field is explicitly editable or runtime-managed."""
+    _isolate_config_sources(monkeypatch, tmp_path)
+    paths = {
+        f"{section}.{field}"
+        for section, fields in AppConfig().model_dump().items()
+        for field in fields
+    }
+
+    assert EDITABLE_PATHS.isdisjoint(INTERNAL_PATHS)
+    assert paths == EDITABLE_PATHS | INTERNAL_PATHS
+
+
+def test_build_config_preserves_custom_ca_bundle() -> None:
+    original = AppConfig()
+    original.server.tls_verify = "C:/certs/lab-ca.pem"
+
+    new = build_config(original, **_form_values(original))
+
+    assert new.server.tls_verify == "C:/certs/lab-ca.pem"
+
+
+def test_build_config_preserves_card_data_auto_detection() -> None:
+    original = AppConfig()
+    assert original.mtgo.card_data_source_enabled is True
+    assert original.mtgo.card_data_source_dir is None
+
+    new = build_config(original, **_form_values(original))
+
+    assert new.mtgo.card_data_source_enabled is True
+    assert new.mtgo.card_data_source_dir is None
 
 
 def test_build_config_preserves_every_unedited_field(
