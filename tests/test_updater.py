@@ -92,6 +92,25 @@ def test_check_json_with_no_releases_is_up_to_date(tmp_path: Path) -> None:
     assert result.message == "You're up to date (v0.4.9)."
 
 
+def test_check_reports_installed_update_when_running_version_is_old(tmp_path: Path) -> None:
+    fake_exe = tmp_path / "Update.exe"
+    completed = subprocess.CompletedProcess(
+        args=[],
+        returncode=0,
+        stdout=('{"currentVersion":"0.5.0","futureVersion":"0.5.0","releasesToApply":[]}\n'),
+        stderr="",
+    )
+    with (
+        patch("deep_analysis_agent.updater._find_update_exe", return_value=fake_exe),
+        patch("subprocess.run", return_value=completed),
+    ):
+        result = check_for_update("0.4.9")
+
+    assert result.available is False
+    assert result.target_version == "0.5.0"
+    assert result.message == "Update v0.5.0 is installed. Restart Deep Analysis to use it."
+
+
 def test_apply_update_reports_missing_update_exe() -> None:
     with patch("deep_analysis_agent.updater._find_update_exe", return_value=None):
         result = apply_update()
@@ -167,6 +186,50 @@ def test_apply_update_rejects_incomplete_target_install(tmp_path: Path) -> None:
 
     assert result.started is False
     assert result.reason == "target_not_installed"
+
+
+def test_apply_update_accepts_newer_version_when_feed_advances(tmp_path: Path) -> None:
+    fake_exe = tmp_path / "Update.exe"
+    (tmp_path / "app-0.6.0").mkdir()
+    child = MagicMock()
+
+    def _finish_update(*, timeout: int) -> int:
+        assert timeout == 120
+        (tmp_path / "app-0.8.0").mkdir()
+        return 0
+
+    child.wait.side_effect = _finish_update
+    with (
+        patch("deep_analysis_agent.updater._find_update_exe", return_value=fake_exe),
+        patch("subprocess.Popen", return_value=child),
+    ):
+        result = apply_update(target_version="0.7.0")
+
+    assert result.started is True
+    assert result.reason == "completed"
+    assert result.target_version == "0.8.0"
+    assert "v0.8.0 installed successfully" in result.detail
+
+
+def test_apply_update_fails_closed_when_pre_update_inventory_fails(tmp_path: Path) -> None:
+    fake_exe = tmp_path / "Update.exe"
+    old_dir = tmp_path / "app-0.6.0"
+    old_dir.mkdir()
+    child = MagicMock()
+    child.wait.return_value = 0
+    with (
+        patch("deep_analysis_agent.updater._find_update_exe", return_value=fake_exe),
+        patch(
+            "deep_analysis_agent.updater._ready_app_versions",
+            side_effect=[None, {"0.6.0": old_dir}],
+        ),
+        patch("subprocess.Popen", return_value=child),
+    ):
+        result = apply_update(target_version="0.7.0")
+
+    assert result.started is False
+    assert result.reason == "target_not_installed"
+    assert result.target_version == "0.7.0"
 
 
 def test_apply_update_reports_nonzero_exit(tmp_path: Path) -> None:

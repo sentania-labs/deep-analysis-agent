@@ -63,6 +63,40 @@ def _parse_check_output(stdout: str) -> dict[str, Any] | None:
     return None
 
 
+def _ready_app_versions(app_root: Path) -> dict[str, Path] | None:
+    """Return complete Squirrel app directories keyed by their version."""
+    try:
+        children = list(app_root.iterdir())
+    except OSError:
+        logger.exception("update_app_directory_scan_failed app_root=%s", app_root)
+        return None
+
+    ready: dict[str, Path] = {}
+    for child in children:
+        if not child.is_dir() or not child.name.startswith(SQUIRREL_APP_DIR_PREFIX):
+            continue
+        version = child.name.removeprefix(SQUIRREL_APP_DIR_PREFIX)
+        if version and not (child / ".not-finished").exists():
+            ready[version] = child
+    return ready
+
+
+def _newest_ready_version(versions: dict[str, Path]) -> str | None:
+    """Choose the most recently written ready app directory."""
+    if not versions:
+        return None
+
+    def _write_time(item: tuple[str, Path]) -> tuple[int, str]:
+        version, path = item
+        try:
+            return path.stat().st_mtime_ns, version
+        except OSError:
+            logger.exception("update_app_directory_stat_failed app_dir=%s", path)
+            return 0, version
+
+    return max(versions.items(), key=_write_time)[0]
+
+
 def check_for_update(current_version: str) -> UpdateCheckResult:
     update_exe = _find_update_exe()
     if update_exe is None:
@@ -116,6 +150,20 @@ def check_for_update(current_version: str) -> UpdateCheckResult:
             message="Update check returned an unexpected response. See Open Log.",
         )
     if not releases:
+        installed_version = info.get("currentVersion")
+        if (
+            isinstance(installed_version, str)
+            and installed_version.strip()
+            and installed_version.strip() != current_version
+        ):
+            installed_version = installed_version.strip()
+            return UpdateCheckResult(
+                available=False,
+                message=(
+                    f"Update v{installed_version} is installed. Restart Deep Analysis to use it."
+                ),
+                target_version=installed_version,
+            )
         return UpdateCheckResult(
             available=False,
             message=f"You're up to date (v{current_version}).",
@@ -152,6 +200,7 @@ def apply_update(
             ),
             target_version=target_version,
         )
+    ready_before = _ready_app_versions(update_exe.parent)
     try:
         proc = subprocess.Popen(
             [str(update_exe), f"--update={_UPDATE_URL}"],
@@ -208,15 +257,26 @@ def apply_update(
             target_version=target_version,
         )
 
+    installed_version = target_version
     if target_version is not None:
-        target_dir = update_exe.parent / f"{SQUIRREL_APP_DIR_PREFIX}{target_version}"
-        target_ready = target_dir.is_dir() and not (target_dir / ".not-finished").exists()
-        if not target_ready:
+        ready_after = _ready_app_versions(update_exe.parent)
+        if ready_before is None or ready_after is None:
+            installed_version = None
+        elif target_version not in ready_after:
+            new_versions = {
+                version: path
+                for version, path in ready_after.items()
+                if version not in ready_before
+            }
+            installed_version = _newest_ready_version(new_versions)
+        if installed_version is None:
             logger.error(
-                "update_apply_target_missing update_exe=%s target_version=%s target_dir=%s",
+                "update_apply_target_missing update_exe=%s target_version=%s ready_before=%s "
+                "ready_after=%s",
                 update_exe,
                 target_version,
-                target_dir,
+                sorted(ready_before) if ready_before is not None else None,
+                sorted(ready_after) if ready_after is not None else None,
             )
             return UpdateApplyResult(
                 started=False,
@@ -229,18 +289,24 @@ def apply_update(
                 exit_code=0,
                 target_version=target_version,
             )
+        if installed_version != target_version:
+            logger.info(
+                "update_apply_feed_advanced expected_version=%s installed_version=%s",
+                target_version,
+                installed_version,
+            )
 
     logger.info(
         "update_apply_completed update_exe=%s returncode=0 target_version=%s",
         update_exe,
-        target_version,
+        installed_version,
     )
-    version_detail = f" v{target_version}" if target_version is not None else ""
+    version_detail = f" v{installed_version}" if installed_version is not None else ""
     return UpdateApplyResult(
         started=True,
         reason="completed",
         detail=f"Update{version_detail} installed successfully. Restart Deep Analysis to use it.",
         update_exe=str(update_exe),
         exit_code=0,
-        target_version=target_version,
+        target_version=installed_version,
     )

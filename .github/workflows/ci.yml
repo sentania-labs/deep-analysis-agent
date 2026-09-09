@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 # Standing rule for sentania-labs: fork PRs don't run CI.
 # Every job re-checks this via `if:` (required on job-level for PRs).
 
@@ -13,8 +17,8 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.owner.login == 'sentania-labs'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - name: Install uv
@@ -30,8 +34,8 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.owner.login == 'sentania-labs'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - name: Install uv
@@ -45,8 +49,8 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.owner.login == 'sentania-labs'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - name: Install uv
@@ -60,8 +64,8 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.owner.login == 'sentania-labs'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - name: Install uv
@@ -78,7 +82,7 @@ jobs:
         run: git diff --exit-code docs/diagrams/*.png
       - name: Upload rendered PNGs on drift
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: rendered-diagrams
           path: docs/diagrams/*.png
@@ -88,8 +92,8 @@ jobs:
     runs-on: windows-latest
     needs: [lint, typecheck, test]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - name: Install uv
@@ -110,7 +114,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          # GUI-subsystem exe (console=False) — must Start-Process with -Wait
+          # GUI-subsystem exe (console=False), use Start-Process with -Wait
           # so pwsh waits for the process to exit and captures its code.
           $proc = Start-Process -FilePath "dist/deep-analysis-agent/DeepAnalysisAgent.exe" `
                                  -ArgumentList "--version" -Wait -PassThru
@@ -118,3 +122,12 @@ jobs:
           if ($proc.ExitCode -ne 0) {
             throw "frozen exe smoke test failed (exit $($proc.ExitCode))"
           }
+      - name: Install NuGet CLI
+        run: choco install nuget.commandline --yes
+        shell: pwsh
+      - name: Install Clowd.Squirrel
+        run: nuget install Clowd.Squirrel -Version 2.11.1 -ExcludeVersion -OutputDirectory tools
+        shell: pwsh
+      - name: Exercise installed updater outcomes
+        run: pwsh tests/windows/run_updater_e2e.ps1
+        shell: pwsh
