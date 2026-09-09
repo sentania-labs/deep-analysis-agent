@@ -13,11 +13,13 @@
 
 ## Verifying the update path
 
-To smoke-test auto-update across two versions:
-1. Install v0.4.0 via `Setup.exe`.
-2. Tag and release v0.4.1.
-3. Restart the agent — it should auto-update within one startup cycle.
-4. Confirm via tray → About that the version number changed.
+To smoke-test the [update workflow](../README.md#installation) across two versions:
+
+1. Install a release containing the updater changes via `Setup.exe`.
+2. Publish a newer release to the update feed.
+3. Select **Check for Updates** from the installed agent and wait for the result.
+4. After success, quit and launch from the Start Menu, then confirm via
+   tray → About that the version number changed.
 
 ## Version format
 

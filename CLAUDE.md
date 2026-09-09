@@ -12,8 +12,8 @@ The agent is the client-side half of the Deep Analysis platform. It runs as a Wi
 
 - **License:** MIT (open-source, maximally permissive)
 - **Platform:** Windows only for v1. Cross-platform is not in scope.
-- **Packaging:** Squirrel.Windows (per-user install, invisible auto-updates, no UAC prompts)
-- **Install target:** `%LOCALAPPDATA%\DeepAnalysis\`
+- **Packaging:** Squirrel.Windows (see [installer architecture](docs/installer-architecture.md))
+- **Install target:** see [Installation](README.md#installation)
 
 ## Charter
 
@@ -34,14 +34,16 @@ sanctioned cross-system channel.
 | Config | Pydantic v2 (BaseSettings, TOML config file) |
 | Logging | Python structlog (JSON formatter) |
 | Packaging | PyInstaller (single-file exe) |
-| Distribution / self-update | Squirrel.Windows (NuGet-based, per-user, invisible) |
+| Distribution / self-update | Squirrel.Windows (see [update flow](docs/installer-architecture.md#update-flow)) |
 | Server client types | OpenAPI-generated from deep-analysis-server repo |
 
 ## Design decisions — do not change without discussion
 
 ### Squirrel.Windows packaging
 
-Per-user install to `%LOCALAPPDATA%\DeepAnalysis\`. Squirrel handles auto-updates natively — the updater installs alongside the app and applies updates on next launch with no UAC prompts and no interruption to the user. This replaces the fragile self-update mechanism in manalog 0.3.x (which ran from temp, didn't replace the installed exe, and didn't kill the parent process cleanly). Do NOT switch to MSI-to-Program-Files or WiX. Squirrel is the decision.
+Squirrel.Windows is the packaging decision. Do NOT switch to MSI-to-Program-Files
+or WiX. See [installer architecture](docs/installer-architecture.md) for the
+installation and update contract, and [README](README.md#installation) for usage.
 
 ### OpenAPI-generated client types
 
