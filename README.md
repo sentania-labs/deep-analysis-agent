@@ -70,6 +70,10 @@ See [`docs/auth-flow.md`](docs/auth-flow.md) for full details of the registratio
 - Windows 10 or later (x64)
 - A running [Deep Analysis server](https://github.com/sentania-labs/deep-analysis-server)
 
+## Roadmap
+
+See [ROADMAP.md](ROADMAP.md) for what's built, what's next, and what's deliberately deferred.
+
 ## Server repo
 
 The server-side stack (6 open-source services, Docker Compose, Alembic migrations, web UI) lives at:
